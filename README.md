@@ -10,24 +10,26 @@ configurable rules.
 
 ## Toolchain
 
-| Area              | Tool                                                                              | Config                                         |
-| ----------------- | --------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Runtime / tooling | [mise](https://mise.jdx.dev/)                                                     | `mise.toml`                                    |
-| Package manager   | [pnpm](https://pnpm.io/)                                                          | `pnpm-workspace.yaml`, `.npmrc`                |
-| Language          | [TypeScript](https://www.typescriptlang.org/)                                     | `tsconfig.json`                                |
-| Build             | [tsdown](https://tsdown.dev/)                                                     | `tsdown.config.ts`                             |
-| Test              | [Vitest](https://vitest.dev/)                                                     | `vitest.config.ts`                             |
-| Format            | [oxfmt](https://oxc.rs/)                                                          | `.oxfmtrc.json`                                |
-| Lint              | [oxlint](https://oxc.rs/)                                                         | `.oxlintrc.json`                               |
-| Unused code       | [knip](https://knip.dev/)                                                         | `knip.ts`                                      |
-| Spelling          | [cspell](https://cspell.org/)                                                     | `cspell.json`                                  |
-| Secret scanning   | [secretlint](https://github.com/secretlint/secretlint)                            | `.secretlintrc.json`                           |
-| Git hooks         | [simple-git-hooks](https://github.com/toplenboren/simple-git-hooks) + lint-staged | `package.json`, `.lintstagedrc.js`             |
-| AI rules          | [rulesync](https://github.com/dyoshikawa/rulesync)                                | `rulesync.jsonc`, `.rulesync/`                 |
-| Workflow lint     | [actionlint](https://github.com/rhysd/actionlint)                                 | `.github/workflows/actionlint.yml`             |
-| Action pinning    | [pinact](https://github.com/suzuki-shunsuke/pinact)                               | `.pinact.yaml`, `.github/workflows/pinact.yml` |
-| Dependency bumps  | Dependabot                                                                        | `.github/dependabot.yml`                       |
-| CI / Release      | GitHub Actions                                                                    | `.github/workflows/ci.yml`, `publish.yml`      |
+| Area              | Tool                                                                              | Config                                                      |
+| ----------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Runtime / tooling | [mise](https://mise.jdx.dev/)                                                     | `mise.toml`                                                 |
+| Package manager   | [pnpm](https://pnpm.io/)                                                          | `pnpm-workspace.yaml`, `.npmrc`                             |
+| Language          | [TypeScript](https://www.typescriptlang.org/)                                     | `tsconfig.json`                                             |
+| Build             | [tsdown](https://tsdown.dev/)                                                     | `tsdown.config.ts`                                          |
+| Test              | [Vitest](https://vitest.dev/)                                                     | `vitest.config.ts`                                          |
+| Format            | [oxfmt](https://oxc.rs/)                                                          | `.oxfmtrc.json`                                             |
+| Lint              | [oxlint](https://oxc.rs/)                                                         | `.oxlintrc.json`                                            |
+| Unused code       | [knip](https://knip.dev/)                                                         | `knip.ts`                                                   |
+| Spelling          | [cspell](https://cspell.org/)                                                     | `cspell.json`                                               |
+| Secret scanning   | [secretlint](https://github.com/secretlint/secretlint)                            | `.secretlintrc.json`                                        |
+| Git hooks         | [simple-git-hooks](https://github.com/toplenboren/simple-git-hooks) + lint-staged | `package.json`, `.lintstagedrc.js`                          |
+| AI rules          | [rulesync](https://github.com/dyoshikawa/rulesync)                                | `rulesync.jsonc`, `.rulesync/`                              |
+| Workflow lint     | [actionlint](https://github.com/rhysd/actionlint)                                 | `.github/workflows/actionlint.yml`                          |
+| Action pinning    | [pinact](https://github.com/suzuki-shunsuke/pinact)                               | `.pinact.yaml`, `.github/workflows/pinact.yml`              |
+| Dependency bumps  | Dependabot                                                                        | `.github/dependabot.yml`                                    |
+| Misconfig scan    | [Trivy](https://trivy.dev/)                                                       | `.trivyignore`, `.github/workflows/trivy-security-scan.yml` |
+| Dev environment   | [Dev Container](https://containers.dev/)                                          | `.devcontainer/`                                            |
+| CI / Release      | GitHub Actions                                                                    | `.github/workflows/ci.yml`, `publish.yml`                   |
 
 ## Getting started
 
@@ -55,11 +57,12 @@ pnpm cicheck       # run everything CI runs
 
 ## mise tasks
 
-| Task                    | Description                                      |
-| ----------------------- | ------------------------------------------------ |
-| `mise run actionlint`   | Lint GitHub Actions workflows                    |
-| `mise run pinact`       | Pin actions in workflows to full commit SHAs     |
-| `mise run pinact:check` | Fail if any action is not pinned to a commit SHA |
+| Task                    | Description                                               |
+| ----------------------- | --------------------------------------------------------- |
+| `mise run actionlint`   | Lint GitHub Actions workflows                             |
+| `mise run pinact`       | Pin actions in workflows to full commit SHAs              |
+| `mise run pinact:check` | Fail if any action is not pinned to a commit SHA          |
+| `mise run trivy`        | Scan `.devcontainer/` and workflows for misconfigurations |
 
 ## Supply chain hardening
 
@@ -71,6 +74,36 @@ pnpm cicheck       # run everything CI runs
 - Every third-party GitHub Action is pinned to a full-length commit SHA, enforced by `pinact` in CI.
 - Workflows declare the narrowest `permissions:` block they need.
 - `secretlint` runs over every staged file through lint-staged, and over the whole tree in CI.
+- `trivy config` scans `.devcontainer/` and `.github/workflows/` for misconfigurations on every push
+  and pull request that touches them; `CRITICAL` and `HIGH` findings fail the build. Suppressions
+  live in `.trivyignore`, each with the reason it is safe.
+- The dev container pins the Codex CLI installer to a version and verifies its SHA-256 checksum
+  before running it.
+
+## Dev container
+
+`.devcontainer/` provides a sandboxed environment for running AI coding agents with relaxed
+permissions. It is adapted from [dyoshikawa/rulesync](https://github.com/dyoshikawa/rulesync) and
+ships Node, mise-managed tooling (including `actionlint` and `pinact`), `gh`, Claude Code, Codex
+CLI, opencode, Gemini CLI, git-gtr, and zsh/bash with completions.
+
+Open the repository in a Dev Container-aware editor and it builds from `.devcontainer/Dockerfile`,
+then runs `.devcontainer/init.sh` to configure git credentials, the pnpm store, and `pnpm install`.
+
+Secrets are read from the host environment, so export the ones you need before opening the
+container — all of them are optional:
+
+| Host variable                                                   | Forwarded as         |
+| --------------------------------------------------------------- | -------------------- |
+| `OPENCODE_AUTO_APPROVAL_PLUGIN_DEVCONTAINER_GITHUB_TOKEN`       | `GITHUB_TOKEN`       |
+| `OPENCODE_AUTO_APPROVAL_PLUGIN_DEVCONTAINER_OPENAI_API_KEY`     | `OPENAI_API_KEY`     |
+| `OPENCODE_AUTO_APPROVAL_PLUGIN_DEVCONTAINER_GEMINI_API_KEY`     | `GEMINI_API_KEY`     |
+| `OPENCODE_AUTO_APPROVAL_PLUGIN_DEVCONTAINER_OPENROUTER_API_KEY` | `OPENROUTER_API_KEY` |
+| `OPENCODE_AUTO_APPROVAL_PLUGIN_DEVCONTAINER_ZAI_API_KEY`        | `ZHIPU_API_KEY`      |
+| `OPENCODE_AUTO_APPROVAL_PLUGIN_DEVCONTAINER_OPENCODE_API_KEY`   | `OPENCODE_API_KEY`   |
+
+`mise.toml` is copied into the image at build time, so changing it requires rebuilding the
+container.
 
 ## AI coding agent rules
 

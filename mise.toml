@@ -1,9 +1,11 @@
 [tools]
 node = "latest"
 pnpm = "latest"
-# GitHub Actions tooling, resolved through the aqua registry backend.
+# CI tooling, resolved through the aqua registry backend.
 "aqua:rhysd/actionlint" = "latest"
 "aqua:suzuki-shunsuke/pinact" = "latest"
+# Runs the same misconfiguration scan as .github/workflows/trivy-security-scan.yml.
+"aqua:aquasecurity/trivy" = "latest"
 
 [tasks.actionlint]
 description = "Lint GitHub Actions workflows"
@@ -16,3 +18,10 @@ run = "pinact run"
 [tasks."pinact:check"]
 description = "Fail when a GitHub Action is not pinned to a commit SHA"
 run = "pinact run --check"
+
+[tasks.trivy]
+description = "Scan the dev container and workflows for misconfigurations"
+run = """
+trivy config --severity CRITICAL,HIGH --exit-code 1 --ignorefile .trivyignore .devcontainer
+trivy config --severity CRITICAL,HIGH --exit-code 1 --ignorefile .trivyignore .github/workflows
+"""

@@ -36,3 +36,7 @@ itself is not written yet, so `src/index.ts` still holds the template's sample e
     its issue.
 - GitHub Actions must always be pinned to full-length commit SHAs. Run `mise run pinact` to pin them
   and `mise run pinact:check` to verify.
+- `.devcontainer/` holds the sandboxed dev environment for AI coding agents. `mise.toml` is copied
+  into the image at build time, so changing it requires rebuilding the container.
+- `mise run trivy` runs the same misconfiguration scan as CI over `.devcontainer/` and
+  `.github/workflows/`. Suppress a finding only in `.trivyignore`, and record why it is safe.
