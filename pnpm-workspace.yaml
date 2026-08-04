@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=https://json.schemastore.org/pnpm-workspace.json
+# Postinstall scripts stay blocked by default; add packages here only when a
+# build step is genuinely required.
+allowBuilds:
+  esbuild: false
+  simple-git-hooks: false
+ignoreScripts: false
+# Refuse dependency versions published less than a day ago, so a compromised
+# release has time to be pulled before it lands in a lockfile.
+minimumReleaseAge: 1440 # 1 day

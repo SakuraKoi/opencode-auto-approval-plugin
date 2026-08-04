@@ -1,0 +1,50 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read # Required for checking out code
+  id-token: write # Required for npm Trusted Publishing (OIDC)
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Setup mise
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          experimental: true
+
+      - name: Install dependencies
+        run: pnpm install --ignore-scripts
+
+      - name: Verify the tag matches package.json version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_NAME" != "v${PKG_VERSION}" ]; then
+            echo "::error::Tag $TAG_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Run cicheck
+        run: pnpm cicheck
+
+      - name: Build
+        run: pnpm build
+
+      # Requires npm Trusted Publishing to be configured for this package:
+      # https://docs.npmjs.com/trusted-publishers
+      - name: Publish to npm
+        run: pnpm publish --no-git-checks

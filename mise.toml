@@ -1,0 +1,18 @@
+[tools]
+node = "latest"
+pnpm = "latest"
+# GitHub Actions tooling, resolved through the aqua registry backend.
+"aqua:rhysd/actionlint" = "latest"
+"aqua:suzuki-shunsuke/pinact" = "latest"
+
+[tasks.actionlint]
+description = "Lint GitHub Actions workflows"
+run = "actionlint -color"
+
+[tasks.pinact]
+description = "Pin GitHub Actions to full-length commit SHAs"
+run = "pinact run"
+
+[tasks."pinact:check"]
+description = "Fail when a GitHub Action is not pinned to a commit SHA"
+run = "pinact run --check"

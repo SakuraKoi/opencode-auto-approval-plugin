@@ -1,0 +1,49 @@
+{
+  "cache": {
+    "useCache": true,
+    "cacheLocation": ".cspellcache"
+  },
+  "useGitignore": true,
+  "files": [
+    "**/*.{ts,tsx,js,jsx,mjs,cjs}",
+    "**/*.{json,yaml,yml}",
+    "**/*.md",
+    "*.{json,yaml,yml,md}"
+  ],
+  "ignorePaths": [
+    "coverage/**",
+    "dist/**",
+    "pnpm-lock.yaml",
+    "node_modules/**",
+    ".pnpm-store/**",
+    ".git/**",
+    ".gitignore",
+    ".rulesync/**"
+  ],
+  "words": [
+    "actionlint",
+    "aqua",
+    "aquaproj",
+    "cicheck",
+    "claudecode",
+    "codexcli",
+    "cspell",
+    "deepwiki",
+    "dyoshikawa",
+    "esbuild",
+    "knip",
+    "lintstagedrc",
+    "opencode",
+    "oxfmt",
+    "oxfmtrc",
+    "oxlint",
+    "oxlintrc",
+    "pinact",
+    "rhysd",
+    "rulesync",
+    "secretlint",
+    "shunsuke",
+    "tsdown",
+    "typecheck"
+  ]
+}
