@@ -1,0 +1,3 @@
+default_permissions = ":danger-full-access"
+approvals_reviewer = "auto_review"
+approval_policy = "on-request"
