@@ -57,6 +57,7 @@
     "trivy",
     "trivyignores",
     "tsdown",
+    "tldjs",
     "typecheck",
     "worktrees",
     "ZHIPU"

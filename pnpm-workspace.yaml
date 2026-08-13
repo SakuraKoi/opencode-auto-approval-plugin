@@ -4,6 +4,7 @@
 allowBuilds:
   esbuild: false
   simple-git-hooks: false
+  tldjs: false
 ignoreScripts: false
 # Refuse dependency versions published less than a day ago, so a compromised
 # release has time to be pulled before it lands in a lockfile.
