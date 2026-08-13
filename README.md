@@ -195,10 +195,15 @@ edit `.rulesync/**` instead, never the generated output.
 
 ## Publishing
 
-`.github/workflows/publish.yml` publishes to npm when a `v*.*.*` tag is pushed. It verifies the tag
-matches `package.json`'s version, runs `pnpm cicheck`, builds, and publishes via
-[npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers) (OIDC — no npm token in secrets).
-Configure the trusted publisher on npm before the first release.
+`.github/workflows/publish.yml` publishes to npm when a GitHub Release is published, or when run
+manually for a release tag. It checks that the tag is a semantic `v*.*.*` version, matches
+`package.json`, and points to a commit in `main`; it then runs `pnpm cicheck`, builds, and publishes
+through [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers) (OIDC — no npm token in
+secrets).
+
+Configure npm's trusted publisher for `dyoshikawa/opencode-auto-approval-plugin` to use GitHub
+Actions and the `.github/workflows/publish.yml` workflow. For each later release, bump the package
+version on `main`, create its matching `v<version>` tag, and publish the GitHub Release.
 
 OpenCode publishes and distributes plugins as ordinary npm packages: users add the package name to
 the `plugin` array in `opencode.json`, and OpenCode installs it with Bun at startup. See the
