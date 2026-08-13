@@ -41,6 +41,7 @@
     "knip",
     "lintstagedrc",
     "misconfig",
+    "msgpackr",
     "opencode",
     "OPENROUTER",
     "oxfmt",
@@ -59,6 +60,8 @@
     "tsdown",
     "tldjs",
     "typecheck",
+    "webfetch",
+    "websearch",
     "worktrees",
     "ZHIPU"
   ]

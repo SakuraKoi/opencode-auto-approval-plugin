@@ -3,6 +3,7 @@
 # build step is genuinely required.
 allowBuilds:
   esbuild: false
+  msgpackr-extract: false
   simple-git-hooks: false
   tldjs: false
 ignoreScripts: false

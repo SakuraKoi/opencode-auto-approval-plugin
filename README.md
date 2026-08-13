@@ -1,12 +1,87 @@
 # opencode-auto-approval-plugin
 
-An [opencode](https://opencode.ai/) plugin that auto-approves tool permission requests based on
-configurable rules.
+An [OpenCode](https://opencode.ai/) plugin that sends tool operations to a read-only AI reviewer
+before automatically approving them.
 
-> [!NOTE]
-> The repository is scaffolded from [dyoshikawa/ts-template](https://github.com/dyoshikawa/ts-template);
-> the plugin implementation itself is not written yet — `src/index.ts` still holds the template's
-> sample export.
+The reviewer runs in its own OpenCode session. It may inspect the workspace with `read`, `glob`,
+`grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP tools, or
+start subagents.
+
+## Install
+
+OpenCode installs npm plugins listed in `opencode.json` automatically. Add the package to the
+project or global OpenCode configuration:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-auto-approval-plugin"],
+}
+```
+
+For local development, build the package and add the generated `dist/index.js` to
+`.opencode/plugins/`, or link the package through an npm workspace. OpenCode also loads TypeScript
+files placed directly in `.opencode/plugins/`.
+
+## Configuration
+
+Use a plugin tuple to pass options. The defaults are `mode: "on-ask"`, a 30-second review timeout,
+and the provider/model of the main session.
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    [
+      "opencode-auto-approval-plugin",
+      {
+        "mode": "on-ask",
+        "reviewer": {
+          "timeoutMs": 30000,
+        },
+      },
+    ],
+  ],
+}
+```
+
+Set `reviewer.model` to run reviews through a separately configured OpenCode provider and model.
+The plugin never reads or manages API keys; authentication remains entirely in OpenCode.
+
+```jsonc
+{
+  "plugin": [
+    [
+      "opencode-auto-approval-plugin",
+      {
+        "mode": "all-tools",
+        "reviewer": {
+          "model": {
+            "providerID": "openrouter",
+            "modelID": "openai/gpt-5.6-luna",
+          },
+          "timeoutMs": 15000,
+        },
+      },
+    ],
+  ],
+}
+```
+
+### Review modes
+
+| Mode               | Reviewed operations                                           | `allow`                      | `deny`                               | `escalate` / reviewer failure                             |
+| ------------------ | ------------------------------------------------------------- | ---------------------------- | ------------------------------------ | --------------------------------------------------------- |
+| `on-ask` (default) | Only operations that OpenCode already decided should ask      | Sends an SDK `once` approval | Leaves the OpenCode approval pending | Leaves the OpenCode approval pending                      |
+| `all-tools`        | Every intercepted tool call, including OpenCode-allowed calls | Runs the tool                | Blocks the tool                      | Blocks the tool and reports that human review is required |
+
+OpenCode's public plugin API does not currently provide a way to create and await a new permission
+dialogue from `tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict:
+the tool does not run and the user must explicitly retry after reviewing the reported reason. In
+contrast, `on-ask` preserves OpenCode's native human permission UI.
+
+Explicit OpenCode `deny` rules always remain in effect. The plugin is an additional review layer;
+it never turns a built-in deny into an allow.
 
 ## Toolchain
 
@@ -124,6 +199,10 @@ edit `.rulesync/**` instead, never the generated output.
 matches `package.json`'s version, runs `pnpm cicheck`, builds, and publishes via
 [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers) (OIDC — no npm token in secrets).
 Configure the trusted publisher on npm before the first release.
+
+OpenCode publishes and distributes plugins as ordinary npm packages: users add the package name to
+the `plugin` array in `opencode.json`, and OpenCode installs it with Bun at startup. See the
+[OpenCode plugin documentation](https://opencode.ai/docs/plugins/) for the loader and cache behavior.
 
 ## License
 
