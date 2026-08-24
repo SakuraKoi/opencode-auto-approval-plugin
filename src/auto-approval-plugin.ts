@@ -65,14 +65,11 @@ export function createAutoApprovalPlugin(
         output.parts.splice(0);
         const value = event.arguments.trim();
         if (value !== "true" && value !== "false") {
-          await notify({
-            message: "Usage: /auto-approve <true|false>",
-            variant: "warning",
-          });
-          throw new Error(commandHandledMessage);
+          enabled = !enabled;
+        } else {
+          enabled = value === "true";
         }
 
-        enabled = value === "true";
         await notify({
           message: `Auto-approval reviewer ${enabled ? "enabled" : "disabled"}.`,
           variant: "success",
