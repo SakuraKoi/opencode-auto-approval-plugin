@@ -1,5 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin";
 
+import { createAutoApproveCommandHandler } from "./auto-approve-command.js";
 import { parsePluginConfiguration, type ModelReference } from "./config.js";
 import { defaultDependencies, type AutoApprovalPluginDependencies } from "./opencode-adapters.js";
 import {
@@ -20,8 +21,6 @@ type PermissionRequest = {
   metadata: Record<string, unknown>;
 };
 
-const commandHandledMessage = "Auto-approve command handled.";
-
 export function createAutoApprovalPlugin(
   input: { dependencies?: Partial<AutoApprovalPluginDependencies> } = {},
 ): Plugin {
@@ -36,7 +35,6 @@ export function createAutoApprovalPlugin(
     const configuration = parsePluginConfiguration(options);
     const models = new Map<string, ModelReference>();
     const intents = new Map<string, UserIntent>();
-    let enabled = false;
     const notify = async (notification: { message: string; variant: ToastVariant }) => {
       try {
         await dependencies.showToast({
@@ -48,6 +46,7 @@ export function createAutoApprovalPlugin(
         // Toasts are best-effort and must not affect command execution.
       }
     };
+    const autoApproveCommand = createAutoApproveCommandHandler({ notify });
 
     return {
       config: async (config) => {
@@ -61,21 +60,7 @@ export function createAutoApprovalPlugin(
       },
       "command.execute.before": async (event, output) => {
         if (event.command !== "auto-approve") return;
-
-        output.parts.splice(0);
-        const value = event.arguments.trim();
-        if (value !== "true" && value !== "false") {
-          enabled = !enabled;
-        } else {
-          enabled = value === "true";
-        }
-
-        await notify({
-          message: `Auto-approval reviewer ${enabled ? "enabled" : "disabled"}.`,
-          variant: "success",
-        });
-        // OpenCode 1.18 calls the agent even with no parts, so abort after handling the command.
-        throw new Error(commandHandledMessage);
+        await autoApproveCommand.execute(event, output);
       },
       "chat.message": (event, output) => {
         if (event.model) models.set(event.sessionID, event.model);
@@ -108,7 +93,7 @@ export function createAutoApprovalPlugin(
           type: string;
         };
         if (
-          !enabled ||
+          !autoApproveCommand.isEnabled() ||
           configuration.mode !== "on-ask" ||
           permissionEvent.type !== "permission.asked"
         )
@@ -146,7 +131,7 @@ export function createAutoApprovalPlugin(
       },
       "tool.execute.before": async (event, output) => {
         if (
-          !enabled ||
+          !autoApproveCommand.isEnabled() ||
           configuration.mode !== "all-tools" ||
           reviewer.isReviewerSession({ sessionID: event.sessionID })
         )
