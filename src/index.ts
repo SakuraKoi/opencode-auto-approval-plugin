@@ -1,7 +1,7 @@
 import type { Plugin, PluginOptions } from "@opencode-ai/plugin";
 import { OpencodeClient as PermissionClient } from "@opencode-ai/sdk/v2/client";
 
-import { parsePluginConfiguration, type ModelReference } from "./config.js";
+import { type ModelReference, parsePluginConfiguration } from "./config.js";
 import {
   Reviewer,
   reviewerAgent,
@@ -180,7 +180,10 @@ export function createAutoApprovalPlugin(
             userIntent: intents.get(request.sessionID),
             model: models.get(request.sessionID),
           });
-          if (decision.verdict === "escalate") return;
+          if (decision.verdict === "escalate") {
+            await notify(decisionNotification({ action: request.permission, decision }));
+            return;
+          }
           await dependencies.replyToPermission({
             client: context.client,
             directory: context.directory,
@@ -190,7 +193,8 @@ export function createAutoApprovalPlugin(
             requestID: request.id,
           });
           await notify(decisionNotification({ action: request.permission, decision }));
-        } catch {
+        } catch (error) {
+          await notify(failClosedNotification({ action: request.permission, error }));
           // Fail closed: preserve the original human permission prompt.
         }
       },
@@ -213,19 +217,15 @@ export function createAutoApprovalPlugin(
             model: models.get(event.sessionID),
           });
         } catch (error) {
+          await notify(failClosedNotification({ action: event.tool, error }));
           throw new Error(
             `Auto-approval reviewer failed; human review is required. ${errorMessage(error)}`,
             { cause: error },
           );
         }
 
-        if (decision.verdict === "allow") {
-          await notify(decisionNotification({ action: event.tool, decision }));
-          return;
-        }
-        if (decision.verdict === "deny") {
-          await notify(decisionNotification({ action: event.tool, decision }));
-        }
+        await notify(decisionNotification({ action: event.tool, decision }));
+        if (decision.verdict === "allow") return;
         const outcome = decision.verdict === "deny" ? "denied" : "requires human review";
         throw new Error(`Auto-approval reviewer ${outcome}: ${decision.reason}`);
       },
@@ -237,10 +237,25 @@ function decisionNotification(input: { action: string; decision: ReviewVerdict }
   message: string;
   variant: ToastVariant;
 } {
-  const outcome = input.decision.verdict === "allow" ? "allowed" : "denied";
+  const outcome =
+    input.decision.verdict === "allow"
+      ? `allowed `
+      : input.decision.verdict === "deny"
+        ? `denied`
+        : `escalated`;
   return {
     message: `[Auto-approval] reviewer ${outcome} \`${input.action}\`\n${input.decision.reason}`,
     variant: input.decision.verdict === "allow" ? "success" : "warning",
+  };
+}
+
+function failClosedNotification(input: { action: string; error: unknown }): {
+  message: string;
+  variant: ToastVariant;
+} {
+  return {
+    message: `[Auto-approval] reviewer failed for \`${input.action}\`\n${errorMessage(input.error)}`,
+    variant: "error",
   };
 }
 

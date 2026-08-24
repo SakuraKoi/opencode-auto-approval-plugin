@@ -12,8 +12,11 @@ function createContext() {
   };
 }
 
-function createPlugin(input: { verdict: ReviewerVerdict }) {
-  const review = vi.fn(async () => ({ verdict: input.verdict, reason: "reviewed" }));
+function createPlugin(input: { reviewError?: Error; verdict: ReviewerVerdict }) {
+  const review = vi.fn(async () => {
+    if (input.reviewError) throw input.reviewError;
+    return { verdict: input.verdict, reason: "reviewed" };
+  });
   const isReviewerSession = vi.fn(() => false);
   const replyToPermission = vi.fn(async () => undefined);
   const showToast = vi.fn(async () => undefined);
@@ -154,20 +157,46 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "Auto-approval reviewer allowed bash: reviewed",
+      message: "[Auto-approval] reviewer allowed  `bash`\nreviewed",
       variant: "success",
     });
   });
 
-  it("leaves an ask request for a human when the reviewer escalates", async () => {
+  it("leaves an ask request for a human and shows a toast when the reviewer escalates", async () => {
     const { context } = createContext();
-    const { plugin, replyToPermission } = createPlugin({ verdict: "escalate" });
+    const { plugin, replyToPermission, showToast } = createPlugin({ verdict: "escalate" });
     const hooks = await plugin(context as never, {});
     await enableReviewer(hooks);
 
     await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
 
     expect(replyToPermission).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenLastCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "[Auto-approval] reviewer escalated `bash`\nreviewed",
+      variant: "warning",
+    });
+  });
+
+  it("leaves an ask request for a human and shows a toast when reviewing fails", async () => {
+    const { context } = createContext();
+    const { plugin, replyToPermission, showToast } = createPlugin({
+      reviewError: new Error("review failed"),
+      verdict: "allow",
+    });
+    const hooks = await plugin(context as never, {});
+    await enableReviewer(hooks);
+
+    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
+
+    expect(replyToPermission).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenLastCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "[Auto-approval] reviewer failed for `bash`\nreview failed",
+      variant: "error",
+    });
   });
 
   it("rejects an ask request and shows the reviewer reason when the reviewer denies it", async () => {
@@ -188,14 +217,14 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "Auto-approval reviewer denied bash: reviewed",
+      message: "[Auto-approval] reviewer denied `bash`\nreviewed",
       variant: "warning",
     });
   });
 
   it("blocks an allow-listed tool when all-tools review escalates", async () => {
     const { context } = createContext();
-    const { plugin } = createPlugin({ verdict: "escalate" });
+    const { plugin, showToast } = createPlugin({ verdict: "escalate" });
     const hooks = await plugin(context as never, { mode: "all-tools" });
     await enableReviewer(hooks);
 
@@ -205,6 +234,35 @@ describe("auto approval plugin", () => {
         { args: { command: "git push" } },
       ),
     ).rejects.toThrow("requires human review");
+    expect(showToast).toHaveBeenLastCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "[Auto-approval] reviewer escalated `bash`\nreviewed",
+      variant: "warning",
+    });
+  });
+
+  it("blocks an allow-listed tool and shows a toast when reviewing fails", async () => {
+    const { context } = createContext();
+    const { plugin, showToast } = createPlugin({
+      reviewError: new Error("review failed"),
+      verdict: "allow",
+    });
+    const hooks = await plugin(context as never, { mode: "all-tools" });
+    await enableReviewer(hooks);
+
+    await expect(
+      hooks["tool.execute.before"]?.(
+        { tool: "bash", sessionID: "session-1", callID: "call-1" },
+        { args: { command: "git push" } },
+      ),
+    ).rejects.toThrow("review failed");
+    expect(showToast).toHaveBeenLastCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "[Auto-approval] reviewer failed for `bash`\nreview failed",
+      variant: "error",
+    });
   });
 
   it("permits an allow-listed tool and shows the reviewer reason when all-tools review allows it", async () => {
@@ -222,7 +280,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "Auto-approval reviewer allowed read: reviewed",
+      message: "[Auto-approval] reviewer allowed  `read`\nreviewed",
       variant: "success",
     });
   });
@@ -242,7 +300,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "Auto-approval reviewer denied bash: reviewed",
+      message: "[Auto-approval] reviewer denied `bash`\nreviewed",
       variant: "warning",
     });
   });
