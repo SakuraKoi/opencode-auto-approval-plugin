@@ -9,7 +9,7 @@ export function reviewerPrompt(input: ReviewRequest): string {
     action: input.action,
     resource: input.resource,
     userIntent: input.userIntent ?? null,
-  });
+  }, undefined, 2);
 
   return [
     "You are a security-sensitive permission reviewer for an autonomous agent.",
