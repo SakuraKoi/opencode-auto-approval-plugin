@@ -20,7 +20,8 @@ export type ReviewVerdict = {
 
 export type ReviewSessionClient = {
   session: {
-    create(input: { query: { directory: string } }): Promise<unknown>;
+    create(input: { body: { title: string }; query: { directory: string } }): Promise<unknown>;
+    delete(input: { path: { id: string }; query: { directory: string } }): Promise<unknown>;
     prompt(input: {
       path: { id: string };
       query: { directory: string };
@@ -65,7 +66,10 @@ export class Reviewer {
   }
 
   async review(input: ReviewRequest): Promise<ReviewVerdict> {
-    const session = await this.#client.session.create({ query: { directory: this.#directory } });
+    const session = await this.#client.session.create({
+      body: { title: "opencode-auto-approve-reviewer" },
+      query: { directory: this.#directory },
+    });
     const sessionID = sessionIdentifier(session);
     this.#reviewerSessionIDs.add(sessionID);
 
@@ -87,13 +91,26 @@ export class Reviewer {
       });
       return parseVerdict(responseText(response));
     } catch (error) {
-      void this.#client.session.abort?.({
-        path: { id: sessionID },
-        query: { directory: this.#directory },
-      });
+      try {
+        await this.#client.session.abort?.({
+          path: { id: sessionID },
+          query: { directory: this.#directory },
+        });
+      } catch {
+        // Preserve the original review error if aborting also fails.
+      }
       throw error;
     } finally {
-      this.#reviewerSessionIDs.delete(sessionID);
+      try {
+        await this.#client.session.delete({
+          path: { id: sessionID },
+          query: { directory: this.#directory },
+        });
+      } catch {
+        // Session cleanup is best-effort and must not change the review result.
+      } finally {
+        this.#reviewerSessionIDs.delete(sessionID);
+      }
     }
   }
 }

@@ -9,16 +9,42 @@ import {
 } from "./reviewer.js";
 
 function clientWithResponse(input: {
+  abortError?: Error;
+  deleteError?: Error;
+  promptError?: Error;
   response: string;
-}): ReviewSessionClient & { prompts: ReviewPrompt[] } {
+}): ReviewSessionClient & {
+  aborts: unknown[];
+  creates: unknown[];
+  deletes: unknown[];
+  prompts: ReviewPrompt[];
+} {
+  const aborts: unknown[] = [];
+  const creates: unknown[] = [];
+  const deletes: unknown[] = [];
   const prompts: ReviewPrompt[] = [];
   return {
+    aborts,
+    creates,
+    deletes,
     prompts,
     session: {
-      create: async () => ({ id: "review-session" }),
+      create: async (request) => {
+        creates.push(request);
+        return { id: "review-session" };
+      },
+      delete: async (request) => {
+        deletes.push(request);
+        if (input.deleteError) throw input.deleteError;
+      },
       prompt: async (request) => {
         prompts.push(request);
+        if (input.promptError) throw input.promptError;
         return { parts: [{ type: "text", text: input.response }] };
+      },
+      abort: async (request) => {
+        aborts.push(request);
+        if (input.abortError) throw input.abortError;
       },
     },
   };
@@ -57,6 +83,18 @@ describe("Reviewer", () => {
           tools: { read: true, glob: true, grep: true, lsp: true },
         }),
       }),
+    ]);
+    expect(client.creates).toEqual([
+      {
+        body: { title: "" },
+        query: { directory: "/workspace" },
+      },
+    ]);
+    expect(client.deletes).toEqual([
+      {
+        path: { id: "review-session" },
+        query: { directory: "/workspace" },
+      },
     ]);
   });
 
@@ -133,6 +171,86 @@ describe("Reviewer", () => {
       resource: { command: "git push --force" },
       userIntent: injectedUserIntent,
     });
+  });
+
+  it("aborts and deletes the reviewer session when prompting fails", async () => {
+    const promptError = new Error("prompt failed");
+    const client = clientWithResponse({
+      promptError,
+      response: "unused",
+    });
+    const reviewer = new Reviewer({
+      client,
+      directory: "/workspace",
+      configuration: parsePluginConfiguration({}),
+    });
+
+    await expect(
+      reviewer.review({
+        source: "tool-call",
+        sessionID: "main-session",
+        action: "bash",
+        resource: { command: "git status" },
+      }),
+    ).rejects.toBe(promptError);
+
+    expect(client.aborts).toEqual([
+      {
+        path: { id: "review-session" },
+        query: { directory: "/workspace" },
+      },
+    ]);
+    expect(client.deletes).toEqual([
+      {
+        path: { id: "review-session" },
+        query: { directory: "/workspace" },
+      },
+    ]);
+  });
+
+  it("preserves the review result when deleting the reviewer session fails", async () => {
+    const client = clientWithResponse({
+      deleteError: new Error("delete failed"),
+      response: '{"verdict":"allow","reason":"read-only"}',
+    });
+    const reviewer = new Reviewer({
+      client,
+      directory: "/workspace",
+      configuration: parsePluginConfiguration({}),
+    });
+
+    await expect(
+      reviewer.review({
+        source: "tool-call",
+        sessionID: "main-session",
+        action: "read",
+        resource: { filePath: "README.md" },
+      }),
+    ).resolves.toEqual({ verdict: "allow", reason: "read-only" });
+  });
+
+  it("preserves the prompt error when aborting and deleting both fail", async () => {
+    const promptError = new Error("prompt failed");
+    const client = clientWithResponse({
+      abortError: new Error("abort failed"),
+      deleteError: new Error("delete failed"),
+      promptError,
+      response: "unused",
+    });
+    const reviewer = new Reviewer({
+      client,
+      directory: "/workspace",
+      configuration: parsePluginConfiguration({}),
+    });
+
+    await expect(
+      reviewer.review({
+        source: "tool-call",
+        sessionID: "main-session",
+        action: "bash",
+        resource: { command: "git status" },
+      }),
+    ).rejects.toBe(promptError);
   });
 
   it("registers an agent that only exposes read-only tools", () => {
