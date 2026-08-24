@@ -181,7 +181,7 @@ function reviewerPrompt(input: ReviewRequest): string {
 
   return [
     "You are a security-sensitive permission reviewer for an autonomous agent.",
-    "",
+    "Note: Your permitted working time is limited; timeout will be forcibly terminated and result as escalate.",
     "",
     "Return exactly one JSON object:",
     "```json",
