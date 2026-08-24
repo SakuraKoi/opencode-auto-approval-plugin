@@ -1,4 +1,5 @@
 import type { Plugin, PluginOptions } from "@opencode-ai/plugin";
+import type { Event } from "@opencode-ai/sdk";
 import { OpencodeClient as PermissionClient } from "@opencode-ai/sdk/v2/client";
 
 import { type ModelReference, parsePluginConfiguration } from "./config.js";
@@ -149,6 +150,7 @@ export function createAutoApprovalPlugin(
         if (event.model) models.set(event.sessionID, event.model);
         const current = intents.get(event.sessionID);
         intents.set(event.sessionID, {
+          ...(current?.title === undefined ? {} : { title: current.title }),
           lastMessage: textFromParts(output.parts),
           ...(current?.todos ? { todos: current.todos } : {}),
         });
@@ -162,14 +164,7 @@ export function createAutoApprovalPlugin(
         return Promise.resolve();
       },
       event: async ({ event }) => {
-        if (event.type === "todo.updated") {
-          const current = intents.get(event.properties.sessionID);
-          intents.set(event.properties.sessionID, {
-            lastMessage: current?.lastMessage ?? null,
-            ...(event.properties.todos.length > 0 ? { todos: event.properties.todos } : {}),
-          });
-          return;
-        }
+        if (updateIntentFromEvent({ event, intents })) return;
 
         if (event.type === "session.deleted") {
           models.delete(event.properties.info.id);
@@ -269,7 +264,7 @@ function decisionNotification(input: { action: string; decision: ReviewVerdict }
         ? `denied`
         : `escalated`;
   return {
-    message: `[Auto-approval] reviewer ${outcome} \`${input.action}\`\n${input.decision.reason}`,
+    message: `[Auto-approval] reviewer ${outcome} \`${input.action}\`\n\n${input.decision.reason}`,
     variant: input.decision.verdict === "allow" ? "success" : "warning",
   };
 }
@@ -279,7 +274,7 @@ function failClosedNotification(input: { action: string; error: unknown }): {
   variant: ToastVariant;
 } {
   return {
-    message: `[Auto-approval] reviewer failed for \`${input.action}\`\n${errorMessage(input.error)}`,
+    message: `[Auto-approval] reviewer failed for \`${input.action}\`\n\n${errorMessage(input.error)}`,
     variant: "error",
   };
 }
@@ -288,6 +283,29 @@ function textFromParts(parts: unknown[]): string {
   return parts
     .flatMap((part) => (isRecord(part) && typeof part.text === "string" ? [part.text] : []))
     .join("\n");
+}
+
+function updateIntentFromEvent(input: { event: Event; intents: Map<string, UserIntent> }): boolean {
+  if (input.event.type === "session.created" || input.event.type === "session.updated") {
+    const session = input.event.properties.info;
+    const current = input.intents.get(session.id);
+    input.intents.set(session.id, {
+      ...(session.title ? { title: session.title } : {}),
+      lastMessage: current?.lastMessage ?? null,
+      ...(current?.todos ? { todos: current.todos } : {}),
+    });
+    return true;
+  }
+
+  if (input.event.type !== "todo.updated") return false;
+
+  const current = input.intents.get(input.event.properties.sessionID);
+  input.intents.set(input.event.properties.sessionID, {
+    ...(current?.title === undefined ? {} : { title: current.title }),
+    lastMessage: current?.lastMessage ?? null,
+    ...(input.event.properties.todos.length > 0 ? { todos: input.event.properties.todos } : {}),
+  });
+  return true;
 }
 
 function errorMessage(input: unknown): string {

@@ -157,7 +157,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "[Auto-approval] reviewer allowed `bash`\nreviewed",
+      message: "[Auto-approval] reviewer allowed `bash`\n\nreviewed",
       variant: "success",
     });
   });
@@ -174,7 +174,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "[Auto-approval] reviewer escalated `bash`\nreviewed",
+      message: "[Auto-approval] reviewer escalated `bash`\n\nreviewed",
       variant: "warning",
     });
   });
@@ -194,7 +194,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "[Auto-approval] reviewer failed for `bash`\nreview failed",
+      message: "[Auto-approval] reviewer failed for `bash`\n\nreview failed",
       variant: "error",
     });
   });
@@ -217,7 +217,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "[Auto-approval] reviewer denied `bash`\nreviewed",
+      message: "[Auto-approval] reviewer denied `bash`\n\nreviewed",
       variant: "warning",
     });
   });
@@ -237,7 +237,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "[Auto-approval] reviewer escalated `bash`\nreviewed",
+      message: "[Auto-approval] reviewer escalated `bash`\n\nreviewed",
       variant: "warning",
     });
   });
@@ -248,6 +248,14 @@ describe("auto approval plugin", () => {
     const hooks = await plugin(context as never, { mode: "all-tools" });
     await enableReviewer(hooks);
 
+    await hooks.event?.({
+      event: {
+        type: "session.created",
+        properties: {
+          info: { id: "session-1", title: "Refactor auto-approval context" },
+        },
+      },
+    } as never);
     await hooks["chat.message"]?.(
       {
         sessionID: "session-1",
@@ -279,6 +287,7 @@ describe("auto approval plugin", () => {
     expect(review).toHaveBeenLastCalledWith(
       expect.objectContaining({
         userIntent: {
+          title: "Refactor auto-approval context",
           lastMessage: "Refactor the permission context.",
           todos: [
             {
@@ -295,6 +304,14 @@ describe("auto approval plugin", () => {
     await hooks["chat.message"]?.({ sessionID: "session-1" }, {
       parts: [{ type: "text", text: "Also update the tests." }],
     } as never);
+    await hooks.event?.({
+      event: {
+        type: "session.updated",
+        properties: {
+          info: { id: "session-1", title: "Refactor reviewer tests" },
+        },
+      },
+    } as never);
     await hooks["tool.execute.before"]?.(
       { tool: "edit", sessionID: "session-1", callID: "call-2" },
       { args: { filePath: "src/index.test.ts" } },
@@ -302,6 +319,7 @@ describe("auto approval plugin", () => {
     expect(review).toHaveBeenLastCalledWith(
       expect.objectContaining({
         userIntent: {
+          title: "Refactor reviewer tests",
           lastMessage: "Also update the tests.",
           todos: [
             {
@@ -327,7 +345,10 @@ describe("auto approval plugin", () => {
     );
     expect(review).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        userIntent: { lastMessage: "Also update the tests." },
+        userIntent: {
+          title: "Refactor reviewer tests",
+          lastMessage: "Also update the tests.",
+        },
       }),
     );
 
@@ -369,7 +390,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "[Auto-approval] reviewer failed for `bash`\nreview failed",
+      message: "[Auto-approval] reviewer failed for `bash`\n\nreview failed",
       variant: "error",
     });
   });
@@ -389,7 +410,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "[Auto-approval] reviewer allowed `read`\nreviewed",
+      message: "[Auto-approval] reviewer allowed `read`\n\nreviewed",
       variant: "success",
     });
   });
@@ -409,7 +430,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "[Auto-approval] reviewer denied `bash`\nreviewed",
+      message: "[Auto-approval] reviewer denied `bash`\n\nreviewed",
       variant: "warning",
     });
   });

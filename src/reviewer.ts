@@ -16,6 +16,7 @@ export type ReviewRequest = {
 };
 
 export type UserIntent = {
+  title?: string;
   lastMessage: string | null;
   todos?: Todo[];
 };
