@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import type { Todo } from "@opencode-ai/sdk";
+
 import type { ModelReference, PluginConfiguration } from "./config.js";
 
 type ReviewSource = "permission-request" | "tool-call";
@@ -9,8 +11,13 @@ export type ReviewRequest = {
   sessionID: string;
   action: string;
   resource: unknown;
-  userIntent?: string;
+  userIntent?: UserIntent;
   model?: ModelReference;
+};
+
+export type UserIntent = {
+  lastMessage: string | null;
+  todos?: Todo[];
 };
 
 export type ReviewVerdict = {
@@ -174,6 +181,7 @@ function reviewerPrompt(input: ReviewRequest): string {
 
   return [
     "You are a security-sensitive permission reviewer for an autonomous agent.",
+    "",
     "",
     "Return exactly one JSON object:",
     "```json",

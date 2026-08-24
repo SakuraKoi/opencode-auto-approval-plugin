@@ -7,6 +7,7 @@ import {
   reviewerAgent,
   type ReviewSessionClient,
   type ReviewVerdict,
+  type UserIntent,
 } from "./reviewer.js";
 
 type PermissionRequest = {
@@ -99,7 +100,7 @@ export function createAutoApprovalPlugin(
     });
     const configuration = parsePluginConfiguration(options);
     const models = new Map<string, ModelReference>();
-    const intents = new Map<string, string>();
+    const intents = new Map<string, UserIntent>();
     let enabled = false;
     const notify = async (notification: { message: string; variant: ToastVariant }) => {
       try {
@@ -146,7 +147,11 @@ export function createAutoApprovalPlugin(
       },
       "chat.message": (event, output) => {
         if (event.model) models.set(event.sessionID, event.model);
-        intents.set(event.sessionID, textFromParts(output.parts));
+        const current = intents.get(event.sessionID);
+        intents.set(event.sessionID, {
+          lastMessage: textFromParts(output.parts),
+          ...(current?.todos ? { todos: current.todos } : {}),
+        });
         return Promise.resolve();
       },
       "chat.params": (event) => {
@@ -157,6 +162,21 @@ export function createAutoApprovalPlugin(
         return Promise.resolve();
       },
       event: async ({ event }) => {
+        if (event.type === "todo.updated") {
+          const current = intents.get(event.properties.sessionID);
+          intents.set(event.properties.sessionID, {
+            lastMessage: current?.lastMessage ?? null,
+            ...(event.properties.todos.length > 0 ? { todos: event.properties.todos } : {}),
+          });
+          return;
+        }
+
+        if (event.type === "session.deleted") {
+          models.delete(event.properties.info.id);
+          intents.delete(event.properties.info.id);
+          return;
+        }
+
         const permissionEvent = event as unknown as {
           properties: PermissionRequest;
           type: string;
@@ -228,6 +248,11 @@ export function createAutoApprovalPlugin(
         if (decision.verdict === "allow") return;
         const outcome = decision.verdict === "deny" ? "denied" : "requires human review";
         throw new Error(`Auto-approval reviewer ${outcome}: ${decision.reason}`);
+      },
+      dispose: () => {
+        models.clear();
+        intents.clear();
+        return Promise.resolve();
       },
     };
   };

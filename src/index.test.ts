@@ -242,6 +242,115 @@ describe("auto approval plugin", () => {
     });
   });
 
+  it("provides the latest user message and model todos to the reviewer", async () => {
+    const { context } = createContext();
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, { mode: "all-tools" });
+    await enableReviewer(hooks);
+
+    await hooks["chat.message"]?.(
+      {
+        sessionID: "session-1",
+        model: { providerID: "openai", modelID: "gpt-5.6" },
+      },
+      { parts: [{ type: "text", text: "Refactor the permission context." }] } as never,
+    );
+    await hooks.event?.({
+      event: {
+        type: "todo.updated",
+        properties: {
+          sessionID: "session-1",
+          todos: [
+            {
+              id: "todo-1",
+              content: "Update the reviewer request",
+              status: "in_progress",
+              priority: "high",
+            },
+          ],
+        },
+      },
+    });
+
+    await hooks["tool.execute.before"]?.(
+      { tool: "edit", sessionID: "session-1", callID: "call-1" },
+      { args: { filePath: "src/reviewer.ts" } },
+    );
+    expect(review).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        userIntent: {
+          lastMessage: "Refactor the permission context.",
+          todos: [
+            {
+              id: "todo-1",
+              content: "Update the reviewer request",
+              status: "in_progress",
+              priority: "high",
+            },
+          ],
+        },
+      }),
+    );
+
+    await hooks["chat.message"]?.({ sessionID: "session-1" }, {
+      parts: [{ type: "text", text: "Also update the tests." }],
+    } as never);
+    await hooks["tool.execute.before"]?.(
+      { tool: "edit", sessionID: "session-1", callID: "call-2" },
+      { args: { filePath: "src/index.test.ts" } },
+    );
+    expect(review).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        userIntent: {
+          lastMessage: "Also update the tests.",
+          todos: [
+            {
+              id: "todo-1",
+              content: "Update the reviewer request",
+              status: "in_progress",
+              priority: "high",
+            },
+          ],
+        },
+      }),
+    );
+
+    await hooks.event?.({
+      event: {
+        type: "todo.updated",
+        properties: { sessionID: "session-1", todos: [] },
+      },
+    });
+    await hooks["tool.execute.before"]?.(
+      { tool: "read", sessionID: "session-1", callID: "call-3" },
+      { args: { filePath: "src/index.ts" } },
+    );
+    expect(review).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        userIntent: { lastMessage: "Also update the tests." },
+      }),
+    );
+
+    await hooks.event?.({
+      event: {
+        type: "session.deleted",
+        properties: { info: { id: "session-1" } },
+      },
+    } as never);
+    await hooks["tool.execute.before"]?.(
+      { tool: "read", sessionID: "session-1", callID: "call-4" },
+      { args: { filePath: "README.md" } },
+    );
+    expect(review).toHaveBeenLastCalledWith({
+      source: "tool-call",
+      sessionID: "session-1",
+      action: "read",
+      resource: { filePath: "README.md" },
+      userIntent: undefined,
+      model: undefined,
+    });
+  });
+
   it("blocks an allow-listed tool and shows a toast when reviewing fails", async () => {
     const { context } = createContext();
     const { plugin, showToast } = createPlugin({
