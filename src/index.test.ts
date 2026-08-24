@@ -27,11 +27,130 @@ function createPlugin(input: { verdict: ReviewerVerdict }) {
   return { plugin, review, isReviewerSession };
 }
 
+async function enableReviewer(
+  hooks: Awaited<ReturnType<ReturnType<typeof createAutoApprovalPlugin>>>,
+) {
+  await hooks["command.execute.before"]?.(
+    { command: "auto-approve", sessionID: "session-1", arguments: "true" },
+    { parts: [] },
+  );
+}
+
 describe("auto approval plugin", () => {
+  it("registers the auto-approve command and starts disabled", async () => {
+    const { context } = createContext();
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, { mode: "on-ask" });
+    const config = {} as { agent?: Record<string, unknown>; command?: Record<string, unknown> };
+
+    await hooks.config?.(config as never);
+    await hooks.event?.({
+      event: {
+        type: "permission.updated",
+        properties: {
+          id: "permission-1",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "bash",
+          title: "Run bash",
+          metadata: {},
+          time: { created: 0 },
+        },
+      },
+    });
+
+    expect(config.command?.["auto-approve"]).toEqual({
+      description: "Enable or disable the auto-approval reviewer.",
+      template: "$ARGUMENTS",
+    });
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it("enables and disables the reviewer through the command", async () => {
+    const { context } = createContext();
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, {});
+
+    await enableReviewer(hooks);
+    await hooks.event?.({
+      event: {
+        type: "permission.updated",
+        properties: {
+          id: "permission-1",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "bash",
+          title: "Run bash",
+          metadata: {},
+          time: { created: 0 },
+        },
+      },
+    });
+    expect(review).toHaveBeenCalledOnce();
+
+    await hooks["command.execute.before"]?.(
+      { command: "auto-approve", sessionID: "session-1", arguments: "false" },
+      { parts: [] },
+    );
+    await hooks.event?.({
+      event: {
+        type: "permission.updated",
+        properties: {
+          id: "permission-2",
+          sessionID: "session-1",
+          messageID: "message-2",
+          type: "bash",
+          title: "Run bash",
+          metadata: {},
+          time: { created: 0 },
+        },
+      },
+    });
+    expect(review).toHaveBeenCalledOnce();
+  });
+
+  it("returns usage for an invalid command argument without changing state", async () => {
+    const { context } = createContext();
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, {});
+    const output = { parts: [] as unknown[] };
+
+    await hooks["command.execute.before"]?.(
+      { command: "auto-approve", sessionID: "session-1", arguments: "yes" },
+      output as never,
+    );
+    await hooks.event?.({
+      event: {
+        type: "permission.updated",
+        properties: {
+          id: "permission-1",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "bash",
+          title: "Run bash",
+          metadata: {},
+          time: { created: 0 },
+        },
+      },
+    });
+
+    expect(output.parts).toEqual([
+      {
+        id: "auto-approval-command",
+        messageID: "auto-approval-command",
+        sessionID: "session-1",
+        text: "Usage: /auto-approve <true|false>",
+        type: "text",
+      },
+    ]);
+    expect(review).not.toHaveBeenCalled();
+  });
+
   it("auto-approves an ask request only when the reviewer allows it", async () => {
     const { context, reply } = createContext();
     const { plugin, review } = createPlugin({ verdict: "allow" });
     const hooks = await plugin(context as never, {});
+    await enableReviewer(hooks);
 
     await hooks.event?.({
       event: {
@@ -60,6 +179,7 @@ describe("auto approval plugin", () => {
     const { context, reply } = createContext();
     const { plugin } = createPlugin({ verdict: "escalate" });
     const hooks = await plugin(context as never, {});
+    await enableReviewer(hooks);
 
     await hooks.event?.({
       event: {
@@ -83,6 +203,7 @@ describe("auto approval plugin", () => {
     const { context } = createContext();
     const { plugin } = createPlugin({ verdict: "escalate" });
     const hooks = await plugin(context as never, { mode: "all-tools" });
+    await enableReviewer(hooks);
 
     await expect(
       hooks["tool.execute.before"]?.(
@@ -96,6 +217,7 @@ describe("auto approval plugin", () => {
     const { context } = createContext();
     const { plugin } = createPlugin({ verdict: "allow" });
     const hooks = await plugin(context as never, { mode: "all-tools" });
+    await enableReviewer(hooks);
 
     await expect(
       hooks["tool.execute.before"]?.(

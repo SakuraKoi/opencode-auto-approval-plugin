@@ -44,11 +44,39 @@ export function createAutoApprovalPlugin(
     const configuration = parsePluginConfiguration(options);
     const models = new Map<string, ModelReference>();
     const intents = new Map<string, string>();
+    let enabled = false;
 
     return {
       config: async (config) => {
         config.agent ??= {};
         config.agent["auto-approval-reviewer"] = reviewerAgent();
+        config.command ??= {};
+        config.command["auto-approve"] = {
+          description: "Enable or disable the auto-approval reviewer.",
+          template: "$ARGUMENTS",
+        };
+      },
+      "command.execute.before": async (event, output) => {
+        if (event.command !== "auto-approve") return;
+
+        const value = event.arguments.trim();
+        if (value !== "true" && value !== "false") {
+          output.parts = [
+            commandMessagePart({
+              sessionID: event.sessionID,
+              text: "Usage: /auto-approve <true|false>",
+            }),
+          ];
+          return;
+        }
+
+        enabled = value === "true";
+        output.parts = [
+          commandMessagePart({
+            sessionID: event.sessionID,
+            text: `Auto-approval reviewer ${enabled ? "enabled" : "disabled"}.`,
+          }),
+        ];
       },
       "chat.message": (event, output) => {
         if (event.model) models.set(event.sessionID, event.model);
@@ -63,7 +91,8 @@ export function createAutoApprovalPlugin(
         return Promise.resolve();
       },
       event: async ({ event }) => {
-        if (configuration.mode !== "on-ask" || event.type !== "permission.updated") return;
+        if (!enabled || configuration.mode !== "on-ask" || event.type !== "permission.updated")
+          return;
 
         const request = event.properties as PermissionRequest;
         if (reviewer.isReviewerSession({ sessionID: request.sessionID })) return;
@@ -89,6 +118,7 @@ export function createAutoApprovalPlugin(
       },
       "tool.execute.before": async (event, output) => {
         if (
+          !enabled ||
           configuration.mode !== "all-tools" ||
           reviewer.isReviewerSession({ sessionID: event.sessionID })
         )
@@ -131,6 +161,22 @@ function errorMessage(input: unknown): string {
 
 function isRecord(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null;
+}
+
+function commandMessagePart(input: { sessionID: string; text: string }): {
+  id: string;
+  messageID: string;
+  sessionID: string;
+  text: string;
+  type: "text";
+} {
+  return {
+    id: "auto-approval-command",
+    messageID: "auto-approval-command",
+    sessionID: input.sessionID,
+    text: input.text,
+    type: "text",
+  };
 }
 
 export default createAutoApprovalPlugin();

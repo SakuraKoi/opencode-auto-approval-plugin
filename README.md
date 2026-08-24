@@ -25,8 +25,8 @@ files placed directly in `.opencode/plugins/`.
 
 ## Configuration
 
-Use a plugin tuple to pass options. The defaults are `mode: "on-ask"`, a 30-second review timeout,
-and the provider/model of the main session.
+Use a plugin tuple to pass options. The reviewer is disabled by default. When enabled, the defaults
+are `mode: "on-ask"`, a 30-second review timeout, and the provider/model of the main session.
 
 ```jsonc
 {
@@ -74,6 +74,18 @@ The plugin never reads or manages API keys; authentication remains entirely in O
 | ------------------ | ------------------------------------------------------------- | ---------------------------- | ------------------------------------ | --------------------------------------------------------- |
 | `on-ask` (default) | Only operations that OpenCode already decided should ask      | Sends an SDK `once` approval | Leaves the OpenCode approval pending | Leaves the OpenCode approval pending                      |
 | `all-tools`        | Every intercepted tool call, including OpenCode-allowed calls | Runs the tool                | Blocks the tool                      | Blocks the tool and reports that human review is required |
+
+### Runtime toggle
+
+Enable or disable the reviewer for the current OpenCode process with:
+
+```text
+/auto-approve true
+/auto-approve false
+```
+
+The toggle is held in memory and always starts disabled after OpenCode restarts. The command accepts
+only `true` or `false`; invalid arguments leave the current state unchanged.
 
 OpenCode's public plugin API does not currently provide a way to create and await a new permission
 dialogue from `tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict:
