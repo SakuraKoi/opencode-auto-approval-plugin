@@ -264,7 +264,7 @@ function decisionNotification(input: { action: string; decision: ReviewVerdict }
 } {
   const outcome =
     input.decision.verdict === "allow"
-      ? `allowed `
+      ? `allowed`
       : input.decision.verdict === "deny"
         ? `denied`
         : `escalated`;

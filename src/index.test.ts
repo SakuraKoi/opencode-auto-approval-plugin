@@ -157,7 +157,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "[Auto-approval] reviewer allowed  `bash`\nreviewed",
+      message: "[Auto-approval] reviewer allowed `bash`\nreviewed",
       variant: "success",
     });
   });
@@ -389,7 +389,7 @@ describe("auto approval plugin", () => {
     expect(showToast).toHaveBeenLastCalledWith({
       client: context.client,
       directory: context.directory,
-      message: "[Auto-approval] reviewer allowed  `read`\nreviewed",
+      message: "[Auto-approval] reviewer allowed `read`\nreviewed",
       variant: "success",
     });
   });
