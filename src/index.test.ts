@@ -16,13 +16,15 @@ function createPlugin(input: { verdict: ReviewerVerdict }) {
   const review = vi.fn(async () => ({ verdict: input.verdict, reason: "reviewed" }));
   const isReviewerSession = vi.fn(() => false);
   const replyToPermission = vi.fn(async () => undefined);
+  const showToast = vi.fn(async () => undefined);
   const plugin = createAutoApprovalPlugin({
     dependencies: {
       createReviewer: () => ({ review, isReviewerSession }) as never,
       replyToPermission,
+      showToast,
     },
   });
-  return { plugin, review, isReviewerSession, replyToPermission };
+  return { plugin, review, isReviewerSession, replyToPermission, showToast };
 }
 
 function permissionAskedEvent(input: { id: string }) {
@@ -44,10 +46,16 @@ function permissionAskedEvent(input: { id: string }) {
 async function enableReviewer(
   hooks: Awaited<ReturnType<ReturnType<typeof createAutoApprovalPlugin>>>,
 ) {
-  await hooks["command.execute.before"]?.(
-    { command: "auto-approve", sessionID: "session-1", arguments: "true" },
-    { parts: [] },
-  );
+  const parts = [{ type: "text", text: "true" }];
+  const output = { parts };
+  await expect(
+    hooks["command.execute.before"]?.(
+      { command: "auto-approve", sessionID: "session-1", arguments: "true" },
+      output as never,
+    ),
+  ).rejects.toThrow("Auto-approve command handled.");
+  expect(output.parts).toBe(parts);
+  expect(parts).toEqual([]);
 }
 
 describe("auto approval plugin", () => {
@@ -69,42 +77,62 @@ describe("auto approval plugin", () => {
 
   it("enables and disables the reviewer through the command", async () => {
     const { context } = createContext();
-    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const { plugin, review, showToast } = createPlugin({ verdict: "allow" });
     const hooks = await plugin(context as never, {});
 
     await enableReviewer(hooks);
+    expect(showToast).toHaveBeenCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "Auto-approval reviewer enabled.",
+      variant: "success",
+    });
     await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
     expect(review).toHaveBeenCalledOnce();
 
-    await hooks["command.execute.before"]?.(
-      { command: "auto-approve", sessionID: "session-1", arguments: "false" },
-      { parts: [] },
-    );
+    const parts = [{ type: "text", text: "false" }];
+    const output = { parts };
+    await expect(
+      hooks["command.execute.before"]?.(
+        { command: "auto-approve", sessionID: "session-1", arguments: "false" },
+        output as never,
+      ),
+    ).rejects.toThrow("Auto-approve command handled.");
+    expect(output.parts).toBe(parts);
+    expect(parts).toEqual([]);
+    expect(showToast).toHaveBeenLastCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "Auto-approval reviewer disabled.",
+      variant: "success",
+    });
     await hooks.event?.(permissionAskedEvent({ id: "permission-2" }) as never);
     expect(review).toHaveBeenCalledOnce();
   });
 
   it("returns usage for an invalid command argument without changing state", async () => {
     const { context } = createContext();
-    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const { plugin, review, showToast } = createPlugin({ verdict: "allow" });
     const hooks = await plugin(context as never, {});
-    const output = { parts: [] as unknown[] };
+    const parts = [{ type: "text", text: "yes" }];
+    const output = { parts };
 
-    await hooks["command.execute.before"]?.(
-      { command: "auto-approve", sessionID: "session-1", arguments: "yes" },
-      output as never,
-    );
+    await expect(
+      hooks["command.execute.before"]?.(
+        { command: "auto-approve", sessionID: "session-1", arguments: "yes" },
+        output as never,
+      ),
+    ).rejects.toThrow("Auto-approve command handled.");
     await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
 
-    expect(output.parts).toEqual([
-      {
-        id: "auto-approval-command",
-        messageID: "auto-approval-command",
-        sessionID: "session-1",
-        text: "Usage: /auto-approve <true|false>",
-        type: "text",
-      },
-    ]);
+    expect(output.parts).toBe(parts);
+    expect(parts).toEqual([]);
+    expect(showToast).toHaveBeenCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "Usage: /auto-approve <true|false>",
+      variant: "warning",
+    });
     expect(review).not.toHaveBeenCalled();
   });
 

@@ -12,6 +12,10 @@ type PermissionRequest = {
   metadata: Record<string, unknown>;
 };
 
+type ToastVariant = "info" | "success" | "warning" | "error";
+
+const commandHandledMessage = "Auto-approve command handled.";
+
 type AutoApprovalPluginDependencies = {
   createReviewer(input: {
     client: ReviewSessionClient;
@@ -24,6 +28,12 @@ type AutoApprovalPluginDependencies = {
     message?: string;
     reply: "once" | "reject";
     requestID: string;
+  }): Promise<void>;
+  showToast(input: {
+    client: unknown;
+    directory: string;
+    message: string;
+    variant: ToastVariant;
   }): Promise<void>;
 };
 
@@ -45,6 +55,28 @@ const defaultDependencies: AutoApprovalPluginDependencies = {
       throw new Error(`Failed to reply to permission request: ${JSON.stringify(response.error)}`);
     }
   },
+  showToast: async (input) => {
+    if (!isRecord(input.client) || !isRecord(input.client.tui)) {
+      throw new Error("OpenCode plugin client did not expose its TUI transport.");
+    }
+
+    const tui = input.client.tui as {
+      showToast(options: {
+        body: {
+          message: string;
+          variant: ToastVariant;
+        };
+        query: { directory: string };
+      }): Promise<unknown>;
+    };
+    await tui.showToast({
+      body: {
+        message: input.message,
+        variant: input.variant,
+      },
+      query: { directory: input.directory },
+    });
+  },
 };
 
 export function createAutoApprovalPlugin(
@@ -64,6 +96,17 @@ export function createAutoApprovalPlugin(
     const models = new Map<string, ModelReference>();
     const intents = new Map<string, string>();
     let enabled = false;
+    const notify = async (notification: { message: string; variant: ToastVariant }) => {
+      try {
+        await dependencies.showToast({
+          client: context.client,
+          directory: context.directory,
+          ...notification,
+        });
+      } catch {
+        // Toasts are best-effort and must not affect command execution.
+      }
+    };
 
     return {
       config: async (config) => {
@@ -78,24 +121,23 @@ export function createAutoApprovalPlugin(
       "command.execute.before": async (event, output) => {
         if (event.command !== "auto-approve") return;
 
+        output.parts.splice(0);
         const value = event.arguments.trim();
         if (value !== "true" && value !== "false") {
-          output.parts = [
-            commandMessagePart({
-              sessionID: event.sessionID,
-              text: "Usage: /auto-approve <true|false>",
-            }),
-          ];
-          return;
+          await notify({
+            message: "Usage: /auto-approve <true|false>",
+            variant: "warning",
+          });
+          throw new Error(commandHandledMessage);
         }
 
         enabled = value === "true";
-        output.parts = [
-          commandMessagePart({
-            sessionID: event.sessionID,
-            text: `Auto-approval reviewer ${enabled ? "enabled" : "disabled"}.`,
-          }),
-        ];
+        await notify({
+          message: `Auto-approval reviewer ${enabled ? "enabled" : "disabled"}.`,
+          variant: "success",
+        });
+        // OpenCode 1.18 calls the agent even with no parts, so abort after handling the command.
+        throw new Error(commandHandledMessage);
       },
       "chat.message": (event, output) => {
         if (event.model) models.set(event.sessionID, event.model);
@@ -202,22 +244,6 @@ function permissionClient(input: unknown): PermissionClient {
       ConstructorParameters<typeof PermissionClient>[0]
     >["client"],
   });
-}
-
-function commandMessagePart(input: { sessionID: string; text: string }): {
-  id: string;
-  messageID: string;
-  sessionID: string;
-  text: string;
-  type: "text";
-} {
-  return {
-    id: "auto-approval-command",
-    messageID: "auto-approval-command",
-    sessionID: input.sessionID,
-    text: input.text,
-    type: "text",
-  };
 }
 
 export default createAutoApprovalPlugin();

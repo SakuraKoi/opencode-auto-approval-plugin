@@ -85,7 +85,8 @@ Enable or disable the reviewer for the current OpenCode process with:
 ```
 
 The toggle is held in memory and always starts disabled after OpenCode restarts. The command accepts
-only `true` or `false`; invalid arguments leave the current state unchanged.
+only `true` or `false`; invalid arguments leave the current state unchanged. The result is shown as a
+TUI toast. The plugin then aborts the command before OpenCode can send its argument to the agent.
 
 OpenCode's public plugin API does not currently provide a way to create and await a new permission
 dialogue from `tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict:
