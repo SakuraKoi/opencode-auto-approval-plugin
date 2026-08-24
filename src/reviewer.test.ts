@@ -86,7 +86,7 @@ describe("Reviewer", () => {
     ]);
     expect(client.creates).toEqual([
       {
-        body: { title: "" },
+        body: { title: "opencode-auto-approve-reviewer" },
         query: { directory: "/workspace" },
       },
     ]);

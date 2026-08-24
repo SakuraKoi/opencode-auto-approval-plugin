@@ -12,7 +12,7 @@ on:
 
 permissions:
   contents: read # Required for checking out code
-  id-token: write # Required for npm Trusted Publishing (OIDC)
+  packages: write # Required for publishing to GitHub Packages
 
 jobs:
   publish:
@@ -65,5 +65,10 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Publish to npm
+      - name: Configure GitHub Packages authentication
+        run: npm config set //npm.pkg.github.com/:_authToken "$NODE_AUTH_TOKEN"
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+
+      - name: Publish to GitHub Packages
         run: pnpm publish --no-git-checks
