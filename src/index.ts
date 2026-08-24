@@ -2,7 +2,12 @@ import type { Plugin, PluginOptions } from "@opencode-ai/plugin";
 import { OpencodeClient as PermissionClient } from "@opencode-ai/sdk/v2/client";
 
 import { parsePluginConfiguration, type ModelReference } from "./config.js";
-import { Reviewer, reviewerAgent, type ReviewSessionClient } from "./reviewer.js";
+import {
+  Reviewer,
+  reviewerAgent,
+  type ReviewSessionClient,
+  type ReviewVerdict,
+} from "./reviewer.js";
 
 type PermissionRequest = {
   id: string;
@@ -184,6 +189,7 @@ export function createAutoApprovalPlugin(
               : { reply: "once" }),
             requestID: request.id,
           });
+          await notify(decisionNotification({ action: request.permission, decision }));
         } catch {
           // Fail closed: preserve the original human permission prompt.
         }
@@ -213,11 +219,28 @@ export function createAutoApprovalPlugin(
           );
         }
 
-        if (decision.verdict === "allow") return;
+        if (decision.verdict === "allow") {
+          await notify(decisionNotification({ action: event.tool, decision }));
+          return;
+        }
+        if (decision.verdict === "deny") {
+          await notify(decisionNotification({ action: event.tool, decision }));
+        }
         const outcome = decision.verdict === "deny" ? "denied" : "requires human review";
         throw new Error(`Auto-approval reviewer ${outcome}: ${decision.reason}`);
       },
     };
+  };
+}
+
+function decisionNotification(input: { action: string; decision: ReviewVerdict }): {
+  message: string;
+  variant: ToastVariant;
+} {
+  const outcome = input.decision.verdict === "allow" ? "allowed" : "denied";
+  return {
+    message: `[Auto-approval] reviewer ${outcome} \`${input.action}\`\n${input.decision.reason}`,
+    variant: input.decision.verdict === "allow" ? "success" : "warning",
   };
 }
 

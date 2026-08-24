@@ -136,9 +136,9 @@ describe("auto approval plugin", () => {
     expect(review).not.toHaveBeenCalled();
   });
 
-  it("auto-approves an ask request only when the reviewer allows it", async () => {
+  it("auto-approves an ask request and shows the reviewer reason", async () => {
     const { context } = createContext();
-    const { plugin, review, replyToPermission } = createPlugin({ verdict: "allow" });
+    const { plugin, review, replyToPermission, showToast } = createPlugin({ verdict: "allow" });
     const hooks = await plugin(context as never, {});
     await enableReviewer(hooks);
 
@@ -150,6 +150,12 @@ describe("auto approval plugin", () => {
       directory: "/workspace",
       reply: "once",
       requestID: "permission-1",
+    });
+    expect(showToast).toHaveBeenLastCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "Auto-approval reviewer allowed bash: reviewed",
+      variant: "success",
     });
   });
 
@@ -164,9 +170,9 @@ describe("auto approval plugin", () => {
     expect(replyToPermission).not.toHaveBeenCalled();
   });
 
-  it("rejects an ask request with the reviewer reason when the reviewer denies it", async () => {
+  it("rejects an ask request and shows the reviewer reason when the reviewer denies it", async () => {
     const { context } = createContext();
-    const { plugin, replyToPermission } = createPlugin({ verdict: "deny" });
+    const { plugin, replyToPermission, showToast } = createPlugin({ verdict: "deny" });
     const hooks = await plugin(context as never, {});
     await enableReviewer(hooks);
 
@@ -178,6 +184,12 @@ describe("auto approval plugin", () => {
       message: "reviewed",
       reply: "reject",
       requestID: "permission-1",
+    });
+    expect(showToast).toHaveBeenLastCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "Auto-approval reviewer denied bash: reviewed",
+      variant: "warning",
     });
   });
 
@@ -195,9 +207,9 @@ describe("auto approval plugin", () => {
     ).rejects.toThrow("requires human review");
   });
 
-  it("permits an allow-listed tool when all-tools review allows it", async () => {
+  it("permits an allow-listed tool and shows the reviewer reason when all-tools review allows it", async () => {
     const { context } = createContext();
-    const { plugin } = createPlugin({ verdict: "allow" });
+    const { plugin, showToast } = createPlugin({ verdict: "allow" });
     const hooks = await plugin(context as never, { mode: "all-tools" });
     await enableReviewer(hooks);
 
@@ -207,5 +219,31 @@ describe("auto approval plugin", () => {
         { args: { filePath: "README.md" } },
       ),
     ).resolves.toBeUndefined();
+    expect(showToast).toHaveBeenLastCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "Auto-approval reviewer allowed read: reviewed",
+      variant: "success",
+    });
+  });
+
+  it("shows the reviewer reason before blocking a tool denied in all-tools mode", async () => {
+    const { context } = createContext();
+    const { plugin, showToast } = createPlugin({ verdict: "deny" });
+    const hooks = await plugin(context as never, { mode: "all-tools" });
+    await enableReviewer(hooks);
+
+    await expect(
+      hooks["tool.execute.before"]?.(
+        { tool: "bash", sessionID: "session-1", callID: "call-1" },
+        { args: { command: "git push" } },
+      ),
+    ).rejects.toThrow("Auto-approval reviewer denied: reviewed");
+    expect(showToast).toHaveBeenLastCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "Auto-approval reviewer denied bash: reviewed",
+      variant: "warning",
+    });
   });
 });
