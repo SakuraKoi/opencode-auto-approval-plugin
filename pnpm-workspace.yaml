@@ -10,3 +10,4 @@ ignoreScripts: false
 # Refuse dependency versions published less than a day ago, so a compromised
 # release has time to be pulled before it lands in a lockfile.
 minimumReleaseAge: 1440 # 1 day
+packages: []
