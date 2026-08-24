@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { parsePluginConfiguration } from "./config.js";
-import {
-  Reviewer,
-  reviewerAgent,
-  reviewerAgentName,
-  type ReviewSessionClient,
-} from "./reviewer.js";
+import { reviewerAgent, reviewerAgentName } from "./reviewer-agent.js";
+import { Reviewer, type ReviewSessionClient } from "./reviewer.js";
 
 function clientWithResponse(input: {
   abortError?: Error;
