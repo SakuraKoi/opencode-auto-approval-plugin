@@ -113,7 +113,7 @@ describe("auto approval plugin", () => {
     expect(review).toHaveBeenCalledOnce();
   });
 
-  it("returns usage for an invalid command argument without changing state", async () => {
+  it("toggles the reviewer for an unrecognized command argument", async () => {
     const { context } = createContext();
     const { plugin, review, showToast } = createPlugin({ verdict: "allow" });
     const hooks = await plugin(context as never, {});
@@ -130,13 +130,19 @@ describe("auto approval plugin", () => {
 
     expect(output.parts).toBe(parts);
     expect(parts).toEqual([]);
-    expect(showToast).toHaveBeenCalledWith({
+    expect(showToast).toHaveBeenNthCalledWith(1, {
       client: context.client,
       directory: context.directory,
-      message: "Usage: /auto-approve <true|false>",
-      variant: "warning",
+      message: "Auto-approval reviewer enabled.",
+      variant: "success",
     });
-    expect(review).not.toHaveBeenCalled();
+    expect(review).toHaveBeenCalledOnce();
+    expect(showToast).toHaveBeenLastCalledWith({
+      client: context.client,
+      directory: context.directory,
+      message: "[Auto-approval] reviewer allowed `bash`\n\nreviewed",
+      variant: "success",
+    });
   });
 
   it("auto-approves an ask request and shows the reviewer reason", async () => {
