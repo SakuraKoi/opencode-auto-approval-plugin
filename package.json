@@ -66,10 +66,11 @@
     "pre-commit": "pnpm exec lint-staged"
   },
   "dependencies": {
+    "@opencode-ai/sdk": "1.18.21",
     "zod": "4.1.12"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "1.18.16",
+    "@opencode-ai/plugin": "1.18.21",
     "@secretlint/secretlint-rule-preset-recommend": "13.0.4",
     "@tsconfig/node22": "22.0.5",
     "@types/node": "26.1.2",
@@ -89,7 +90,7 @@
     "vitest": "4.1.10"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.18.16 <2"
+    "@opencode-ai/plugin": ">=1.18.21 <2"
   },
   "engines": {
     "node": ">=22.0.0",

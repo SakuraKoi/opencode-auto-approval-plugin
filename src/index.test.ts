@@ -4,27 +4,41 @@ import { createAutoApprovalPlugin } from "./index.js";
 type ReviewerVerdict = "allow" | "deny" | "escalate";
 
 function createContext() {
-  const reply = vi.fn(async () => true);
   return {
     context: {
-      client: {
-        postSessionIdPermissionsPermissionId: reply,
-      },
+      client: {},
       directory: "/workspace",
     },
-    reply,
   };
 }
 
 function createPlugin(input: { verdict: ReviewerVerdict }) {
   const review = vi.fn(async () => ({ verdict: input.verdict, reason: "reviewed" }));
   const isReviewerSession = vi.fn(() => false);
+  const replyToPermission = vi.fn(async () => undefined);
   const plugin = createAutoApprovalPlugin({
     dependencies: {
       createReviewer: () => ({ review, isReviewerSession }) as never,
+      replyToPermission,
     },
   });
-  return { plugin, review, isReviewerSession };
+  return { plugin, review, isReviewerSession, replyToPermission };
+}
+
+function permissionAskedEvent(input: { id: string }) {
+  return {
+    event: {
+      type: "permission.asked" as never,
+      properties: {
+        id: input.id,
+        sessionID: "session-1",
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+      },
+    },
+  };
 }
 
 async function enableReviewer(
@@ -44,20 +58,7 @@ describe("auto approval plugin", () => {
     const config = {} as { agent?: Record<string, unknown>; command?: Record<string, unknown> };
 
     await hooks.config?.(config as never);
-    await hooks.event?.({
-      event: {
-        type: "permission.updated",
-        properties: {
-          id: "permission-1",
-          sessionID: "session-1",
-          messageID: "message-1",
-          type: "bash",
-          title: "Run bash",
-          metadata: {},
-          time: { created: 0 },
-        },
-      },
-    });
+    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
 
     expect(config.command?.["auto-approve"]).toEqual({
       description: "Enable or disable the auto-approval reviewer.",
@@ -72,40 +73,14 @@ describe("auto approval plugin", () => {
     const hooks = await plugin(context as never, {});
 
     await enableReviewer(hooks);
-    await hooks.event?.({
-      event: {
-        type: "permission.updated",
-        properties: {
-          id: "permission-1",
-          sessionID: "session-1",
-          messageID: "message-1",
-          type: "bash",
-          title: "Run bash",
-          metadata: {},
-          time: { created: 0 },
-        },
-      },
-    });
+    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
     expect(review).toHaveBeenCalledOnce();
 
     await hooks["command.execute.before"]?.(
       { command: "auto-approve", sessionID: "session-1", arguments: "false" },
       { parts: [] },
     );
-    await hooks.event?.({
-      event: {
-        type: "permission.updated",
-        properties: {
-          id: "permission-2",
-          sessionID: "session-1",
-          messageID: "message-2",
-          type: "bash",
-          title: "Run bash",
-          metadata: {},
-          time: { created: 0 },
-        },
-      },
-    });
+    await hooks.event?.(permissionAskedEvent({ id: "permission-2" }) as never);
     expect(review).toHaveBeenCalledOnce();
   });
 
@@ -119,20 +94,7 @@ describe("auto approval plugin", () => {
       { command: "auto-approve", sessionID: "session-1", arguments: "yes" },
       output as never,
     );
-    await hooks.event?.({
-      event: {
-        type: "permission.updated",
-        properties: {
-          id: "permission-1",
-          sessionID: "session-1",
-          messageID: "message-1",
-          type: "bash",
-          title: "Run bash",
-          metadata: {},
-          time: { created: 0 },
-        },
-      },
-    });
+    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
 
     expect(output.parts).toEqual([
       {
@@ -147,56 +109,48 @@ describe("auto approval plugin", () => {
   });
 
   it("auto-approves an ask request only when the reviewer allows it", async () => {
-    const { context, reply } = createContext();
-    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const { context } = createContext();
+    const { plugin, review, replyToPermission } = createPlugin({ verdict: "allow" });
     const hooks = await plugin(context as never, {});
     await enableReviewer(hooks);
 
-    await hooks.event?.({
-      event: {
-        type: "permission.updated",
-        properties: {
-          id: "permission-1",
-          sessionID: "session-1",
-          messageID: "message-1",
-          type: "bash",
-          title: "Run bash",
-          metadata: {},
-          time: { created: 0 },
-        },
-      },
-    });
+    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
 
     expect(review).toHaveBeenCalledOnce();
-    expect(reply).toHaveBeenCalledWith({
-      path: { id: "session-1", permissionID: "permission-1" },
-      query: { directory: "/workspace" },
-      body: { response: "once" },
+    expect(replyToPermission).toHaveBeenCalledWith({
+      client: {},
+      directory: "/workspace",
+      reply: "once",
+      requestID: "permission-1",
     });
   });
 
   it("leaves an ask request for a human when the reviewer escalates", async () => {
-    const { context, reply } = createContext();
-    const { plugin } = createPlugin({ verdict: "escalate" });
+    const { context } = createContext();
+    const { plugin, replyToPermission } = createPlugin({ verdict: "escalate" });
     const hooks = await plugin(context as never, {});
     await enableReviewer(hooks);
 
-    await hooks.event?.({
-      event: {
-        type: "permission.updated",
-        properties: {
-          id: "permission-1",
-          sessionID: "session-1",
-          messageID: "message-1",
-          type: "bash",
-          title: "Run bash",
-          metadata: {},
-          time: { created: 0 },
-        },
-      },
-    });
+    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
 
-    expect(reply).not.toHaveBeenCalled();
+    expect(replyToPermission).not.toHaveBeenCalled();
+  });
+
+  it("rejects an ask request with the reviewer reason when the reviewer denies it", async () => {
+    const { context } = createContext();
+    const { plugin, replyToPermission } = createPlugin({ verdict: "deny" });
+    const hooks = await plugin(context as never, {});
+    await enableReviewer(hooks);
+
+    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
+
+    expect(replyToPermission).toHaveBeenCalledWith({
+      client: {},
+      directory: "/workspace",
+      message: "reviewed",
+      reply: "reject",
+      requestID: "permission-1",
+    });
   });
 
   it("blocks an allow-listed tool when all-tools review escalates", async () => {

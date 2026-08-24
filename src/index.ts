@@ -1,4 +1,5 @@
 import type { Plugin, PluginOptions } from "@opencode-ai/plugin";
+import { OpencodeClient as PermissionClient } from "@opencode-ai/sdk/v2/client";
 
 import { parsePluginConfiguration, type ModelReference } from "./config.js";
 import { Reviewer, reviewerAgent, type ReviewSessionClient } from "./reviewer.js";
@@ -6,9 +7,9 @@ import { Reviewer, reviewerAgent, type ReviewSessionClient } from "./reviewer.js
 type PermissionRequest = {
   id: string;
   sessionID: string;
-  type: string;
-  pattern?: string | string[];
-  metadata?: Record<string, unknown>;
+  permission: string;
+  patterns: string[];
+  metadata: Record<string, unknown>;
 };
 
 type AutoApprovalPluginDependencies = {
@@ -17,6 +18,13 @@ type AutoApprovalPluginDependencies = {
     directory: string;
     options: PluginOptions;
   }): Reviewer;
+  replyToPermission(input: {
+    client: unknown;
+    directory: string;
+    message?: string;
+    reply: "once" | "reject";
+    requestID: string;
+  }): Promise<void>;
 };
 
 const defaultDependencies: AutoApprovalPluginDependencies = {
@@ -26,6 +34,17 @@ const defaultDependencies: AutoApprovalPluginDependencies = {
       directory: input.directory,
       configuration: parsePluginConfiguration(input.options),
     }),
+  replyToPermission: async (input) => {
+    const response = await permissionClient(input.client).permission.reply({
+      directory: input.directory,
+      ...(input.message === undefined ? {} : { message: input.message }),
+      reply: input.reply,
+      requestID: input.requestID,
+    });
+    if (response.error) {
+      throw new Error(`Failed to reply to permission request: ${JSON.stringify(response.error)}`);
+    }
+  },
 };
 
 export function createAutoApprovalPlugin(
@@ -91,26 +110,37 @@ export function createAutoApprovalPlugin(
         return Promise.resolve();
       },
       event: async ({ event }) => {
-        if (!enabled || configuration.mode !== "on-ask" || event.type !== "permission.updated")
+        const permissionEvent = event as unknown as {
+          properties: PermissionRequest;
+          type: string;
+        };
+        if (
+          !enabled ||
+          configuration.mode !== "on-ask" ||
+          permissionEvent.type !== "permission.asked"
+        )
           return;
 
-        const request = event.properties as PermissionRequest;
+        const request = permissionEvent.properties;
         if (reviewer.isReviewerSession({ sessionID: request.sessionID })) return;
 
         try {
           const decision = await reviewer.review({
             source: "permission-request",
             sessionID: request.sessionID,
-            action: request.type,
-            resource: { pattern: request.pattern, metadata: request.metadata },
+            action: request.permission,
+            resource: { patterns: request.patterns, metadata: request.metadata },
             userIntent: intents.get(request.sessionID),
             model: models.get(request.sessionID),
           });
-          if (decision.verdict !== "allow") return;
-          await context.client.postSessionIdPermissionsPermissionId({
-            path: { id: request.sessionID, permissionID: request.id },
-            query: { directory: context.directory },
-            body: { response: "once" },
+          if (decision.verdict === "escalate") return;
+          await dependencies.replyToPermission({
+            client: context.client,
+            directory: context.directory,
+            ...(decision.verdict === "deny"
+              ? { message: decision.reason, reply: "reject" }
+              : { reply: "once" }),
+            requestID: request.id,
           });
         } catch {
           // Fail closed: preserve the original human permission prompt.
@@ -161,6 +191,17 @@ function errorMessage(input: unknown): string {
 
 function isRecord(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null;
+}
+
+function permissionClient(input: unknown): PermissionClient {
+  if (!isRecord(input) || !isRecord(input._client)) {
+    throw new Error("OpenCode plugin client did not expose its SDK transport.");
+  }
+  return new PermissionClient({
+    client: input._client as NonNullable<
+      ConstructorParameters<typeof PermissionClient>[0]
+    >["client"],
+  });
 }
 
 function commandMessagePart(input: { sessionID: string; text: string }): {
