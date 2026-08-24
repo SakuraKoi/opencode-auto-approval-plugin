@@ -4,12 +4,16 @@ import type { ReviewRequest } from "./reviewer.js";
 
 export function reviewerPrompt(input: ReviewRequest): string {
   const boundary = `UNTRUSTED_OPERATION_${randomUUID()}`;
-  const operation = JSON.stringify({
-    source: input.source,
-    action: input.action,
-    resource: input.resource,
-    userIntent: input.userIntent ?? null,
-  }, undefined, 2);
+  const operation = JSON.stringify(
+    {
+      source: input.source,
+      action: input.action,
+      resource: input.resource,
+      userIntent: input.userIntent ?? null,
+    },
+    undefined,
+    2,
+  );
 
   return [
     "You are a security-sensitive permission reviewer for an autonomous agent.",
