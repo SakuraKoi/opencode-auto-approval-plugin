@@ -22,18 +22,56 @@ project or global OpenCode configuration:
 }
 ```
 
-For local development, point `plugins` at the package directory or a local entry file. OpenCode
-also loads TypeScript files placed in `.opencode/plugins/`.
+For local development, point `plugins` at the plugin **directory**. The path must be a directory that
+contains `index.ts` (the server entry) and `tui.ts` (the TUI entry); a file path is rejected with
+`configured plugin path must be a directory`. A directory that also contains a `package.json` is not
+loaded, so keep the entry and the manifest apart.
 
 ```jsonc
 {
   "plugins": [
     {
-      "package": "./src/index.ts",
+      "package": "./src",
     },
   ],
 }
 ```
+
+OpenCode also discovers plugins placed in `<global-config>/plugins/<name>/` or
+`<project>/.opencode/plugins/<name>/`, but discovered plugins receive no `options`.
+
+### Install from a packed tarball
+
+`npm pack` ships `package.json` and `src/`. A directory-based local plugin is loaded from `index.ts`
+and `tui.ts` and ignores `package.json`, so extract the tarball, delete the manifest, and add the two
+entry re-exports:
+
+```ts
+// index.ts
+export { default } from "./src/index.ts";
+export * from "./src/index.ts";
+```
+
+```ts
+// tui.ts
+export { default } from "./src/tui.ts";
+```
+
+Then reference the directory from `plugins` and keep its options beside it:
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "./local_plugins/auto-approval",
+      "options": { "mode": "on-ask" },
+    },
+  ],
+}
+```
+
+Relative paths in the global configuration resolve against the global config directory, so the same
+entry works from every project.
 
 ## Configuration
 
