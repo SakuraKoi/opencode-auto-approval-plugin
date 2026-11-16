@@ -190,7 +190,6 @@ it never turns a built-in deny into an allow.
 | Spelling          | [cspell](https://cspell.org/)                                                     | `cspell.json`                                               |
 | Secret scanning   | [secretlint](https://github.com/secretlint/secretlint)                            | `.secretlintrc.json`                                        |
 | Git hooks         | [simple-git-hooks](https://github.com/toplenboren/simple-git-hooks) + lint-staged | `package.json`, `.lintstagedrc.js`                          |
-| AI rules          | [rulesync](https://github.com/dyoshikawa/rulesync)                                | `rulesync.jsonc`, `.rulesync/`                              |
 | Workflow lint     | [actionlint](https://github.com/rhysd/actionlint)                                 | `.github/workflows/actionlint.yml`                          |
 | Action pinning    | [pinact](https://github.com/suzuki-shunsuke/pinact)                               | `.pinact.yaml`, `.github/workflows/pinact.yml`              |
 | Dependency bumps  | Dependabot                                                                        | `.github/dependabot.yml`                                    |
@@ -216,7 +215,6 @@ pnpm cicheck       # run everything CI runs
 | `pnpm cicheck:code`    | `check` + `test`                                         |
 | `pnpm cicheck:content` | `cspell` + `secretlint`                                  |
 | `pnpm fix`             | Auto-fix formatting and lint problems                    |
-| `pnpm generate`        | Regenerate AI tool configs from `.rulesync/`             |
 | `pnpm knip`            | Report unused files, exports, and dependencies           |
 | `pnpm test`            | Run the test suite                                       |
 | `pnpm test:coverage`   | Run the test suite with coverage                         |
@@ -274,16 +272,10 @@ container.
 
 ## AI coding agent rules
 
-Rules live in `.rulesync/` and are compiled into each tool's native format by `pnpm generate`:
-
-- `.rulesync/rules/*.md` — instructions (overview, coding, testing, GitHub Actions security)
-- `.rulesync/mcp.json` — MCP servers
-- `.rulesync/hooks.json` — session hooks
-- `.rulesync/permissions.jsonc` — per-tool permission settings
-- `rulesync.jsonc` — which tools to generate for (Claude Code, Codex CLI, GitHub Copilot, opencode)
-
-Generated files (`AGENTS.md`, `CLAUDE.md`, `.claude/`, `.github/instructions/`, …) are gitignored —
-edit `.rulesync/**` instead, never the generated output.
+AI tool configurations (`AGENTS.md`, `CLAUDE.md`, `.claude/`, `.codex/`, `.agents/`,
+`.github/instructions/`, `.github/skills/`, `.opencode/memories/`, `.opencode/skills/`, `.mcp.json`)
+are local and untracked. They are gitignored, so each checkout can keep its own instructions without
+committing them. Edit them directly when present.
 
 ## Publishing
 

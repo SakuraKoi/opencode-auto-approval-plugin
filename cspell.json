@@ -17,8 +17,7 @@
     "node_modules/**",
     ".pnpm-store/**",
     ".git/**",
-    ".gitignore",
-    ".rulesync/**"
+    ".gitignore"
   ],
   "words": [
     "actionlint",

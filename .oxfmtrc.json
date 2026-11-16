@@ -16,8 +16,7 @@
     ".claude/settings.json",
     "opencode.jsonc",
     ".github/copilot-instructions.md",
-    ".github/instructions/**",
-    "rulesync.local.jsonc"
+    ".github/instructions/**"
   ],
   "overrides": [
     {
