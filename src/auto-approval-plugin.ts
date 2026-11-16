@@ -1,170 +1,207 @@
-import type { Plugin } from "@opencode-ai/plugin";
+import { Plugin } from "@opencode/plugin";
 
-import { createAutoApproveCommandHandler } from "./auto-approve-command.js";
-import { parsePluginConfiguration, type ModelReference } from "./config.js";
-import { defaultDependencies, type AutoApprovalPluginDependencies } from "./opencode-adapters.js";
+import { createAutoApproveCommandHandler } from "./auto-approve-command.ts";
+import { parsePluginConfiguration } from "./config.ts";
 import {
   decisionNotification,
   errorMessage,
   failClosedNotification,
-  type ToastVariant,
-} from "./plugin-notifications.js";
-import { reviewerAgent } from "./reviewer-agent.js";
-import type { ReviewSessionClient, ReviewVerdict } from "./reviewer.js";
-import { textFromParts, type UserIntent, updateIntentFromEvent } from "./user-intent.js";
+  yoloAcceptNotification,
+  type Notification,
+} from "./plugin-notifications.ts";
+import { applyReviewerContext, disableReasoning, isReviewerToolAllowed } from "./reviewer-agent.ts";
+import { loadReviewContext } from "./reviewer-context.ts";
+import { assertReviewerTool } from "./reviewer-guard.ts";
+import { Reviewer, type ReviewVerdict } from "./reviewer.ts";
+import { AutoApprovalRpc } from "./rpc.ts";
+import { createYoloCommandHandler } from "./yolo-command.ts";
 
-type PermissionRequest = {
-  id: string;
-  sessionID: string;
-  permission: string;
-  patterns: string[];
-  metadata: Record<string, unknown>;
-};
+export function createAutoApprovalPlugin(): Plugin.Plugin {
+  return Plugin.define({
+    id: "auto-approval",
+    async setup(context) {
+      const configuration = parsePluginConfiguration(context.options ?? {});
+      const reviewer = new Reviewer({ context, configuration });
+      const rpc = await context.rpc.register(AutoApprovalRpc, {});
 
-export function createAutoApprovalPlugin(
-  input: { dependencies?: Partial<AutoApprovalPluginDependencies> } = {},
-): Plugin {
-  const dependencies = { ...defaultDependencies, ...input.dependencies };
-
-  return async (context, options = {}) => {
-    const reviewer = dependencies.createReviewer({
-      client: context.client as unknown as ReviewSessionClient,
-      directory: context.directory,
-      options,
-    });
-    const configuration = parsePluginConfiguration(options);
-    const models = new Map<string, ModelReference>();
-    const intents = new Map<string, UserIntent>();
-    const notify = async (notification: { message: string; variant: ToastVariant }) => {
-      try {
-        await dependencies.showToast({
-          client: context.client,
-          directory: context.directory,
-          ...notification,
-        });
-      } catch {
-        // Toasts are best-effort and must not affect command execution.
-      }
-    };
-    const autoApproveCommand = createAutoApproveCommandHandler({ notify });
-
-    return {
-      config: async (config) => {
-        config.agent ??= {};
-        config.agent["auto-approval-reviewer"] = reviewerAgent();
-        config.command ??= {};
-        config.command["auto-approve"] = {
-          description: "Enable or disable the auto-approval reviewer.",
-          template: "$ARGUMENTS",
-        };
-      },
-      "command.execute.before": async (event, output) => {
-        if (event.command !== "auto-approve") return;
-        await autoApproveCommand.execute(event, output);
-      },
-      "chat.message": (event, output) => {
-        if (event.model) models.set(event.sessionID, event.model);
-        const current = intents.get(event.sessionID);
-        intents.set(event.sessionID, {
-          ...(current?.title === undefined ? {} : { title: current.title }),
-          lastMessage: textFromParts(output.parts),
-          ...(current?.todos ? { todos: current.todos } : {}),
-        });
-        return Promise.resolve();
-      },
-      "chat.params": (event) => {
-        models.set(event.sessionID, {
-          providerID: event.model.providerID,
-          modelID: event.model.id,
-        });
-        return Promise.resolve();
-      },
-      event: async ({ event }) => {
-        if (updateIntentFromEvent({ event, intents })) return;
-
-        if (event.type === "session.deleted") {
-          models.delete(event.properties.info.id);
-          intents.delete(event.properties.info.id);
-          return;
-        }
-
-        const permissionEvent = event as unknown as {
-          properties: PermissionRequest;
-          type: string;
-        };
-        if (
-          !autoApproveCommand.isEnabled() ||
-          configuration.mode !== "on-ask" ||
-          permissionEvent.type !== "permission.asked"
-        )
-          return;
-
-        const request = permissionEvent.properties;
-        if (reviewer.isReviewerSession({ sessionID: request.sessionID })) return;
-
+      const notify = async (input: Notification): Promise<void> => {
         try {
-          const decision = await reviewer.review({
-            source: "permission-request",
-            sessionID: request.sessionID,
-            action: request.permission,
-            resource: { patterns: request.patterns, metadata: request.metadata },
-            userIntent: intents.get(request.sessionID),
-            model: models.get(request.sessionID),
-          });
-          if (decision.verdict === "escalate") {
-            await notify(decisionNotification({ action: request.permission, decision }));
+          await rpc.events.emit("notify", input);
+        } catch {
+          // Toasts are best-effort and must not affect command or review behavior.
+        }
+      };
+
+      const autoApproveCommand = createAutoApproveCommandHandler({ notify });
+      const yoloCommand = createYoloCommandHandler({ notify });
+
+      const permissionRegistration = await context.permission.hook(
+        "evaluate",
+        async (evaluation) => {
+          if (reviewer.isReviewerSession(evaluation.sessionID)) {
+            if (!isReviewerToolAllowed(evaluation.action)) {
+              evaluation.effect = "deny";
+              evaluation.message = `The reviewer may not use the ${evaluation.action} action.`;
+            }
             return;
           }
-          await dependencies.replyToPermission({
-            client: context.client,
-            directory: context.directory,
-            ...(decision.verdict === "deny"
-              ? { message: decision.reason, reply: "reject" }
-              : { reply: "once" }),
-            requestID: request.id,
-          });
-          await notify(decisionNotification({ action: request.permission, decision }));
-        } catch (error) {
-          await notify(failClosedNotification({ action: request.permission, error }));
-          // Fail closed: preserve the original human permission prompt.
-        }
-      },
-      "tool.execute.before": async (event, output) => {
-        if (
-          !autoApproveCommand.isEnabled() ||
-          configuration.mode !== "all-tools" ||
-          reviewer.isReviewerSession({ sessionID: event.sessionID })
-        )
+
+          // Explicit allow rules are final. Only operations that would prompt are reviewed.
+          if (evaluation.effect !== "ask") return;
+
+          if (yoloCommand.isEnabled()) {
+            evaluation.effect = "allow";
+            await notify({
+              sessionID: evaluation.sessionID,
+              ...yoloAcceptNotification({ action: evaluation.action }),
+            });
+            return;
+          }
+
+          if (!autoApproveCommand.isEnabled() || configuration.mode !== "on-ask") return;
+
+          try {
+            const reviewContext = await loadReviewContext(context, {
+              sessionID: evaluation.sessionID,
+              ...(evaluation.source === undefined
+                ? {}
+                : { messageID: evaluation.source.messageID }),
+            });
+            const decision = await reviewer.review({
+              source: "permission-request",
+              sessionID: evaluation.sessionID,
+              action: evaluation.action,
+              resource: {
+                resources: evaluation.resources,
+                metadata: evaluation.metadata ?? null,
+                source: evaluation.source ?? null,
+              },
+              ...(reviewContext.userIntent === undefined
+                ? {}
+                : { userIntent: reviewContext.userIntent }),
+              ...(reviewContext.model === undefined ? {} : { model: reviewContext.model }),
+            });
+
+            if (decision.verdict === "allow") {
+              evaluation.effect = "allow";
+            } else if (decision.verdict === "deny") {
+              evaluation.effect = "deny";
+              evaluation.message = decision.reason;
+            } else {
+              // Escalating leaves the native permission prompt in place.
+              evaluation.message = decision.reason;
+            }
+
+            await notify({
+              sessionID: evaluation.sessionID,
+              ...decisionNotification({ action: evaluation.action, decision }),
+            });
+          } catch (error) {
+            // Fail closed: preserve the original human permission prompt.
+            evaluation.effect = "ask";
+            await notify({
+              sessionID: evaluation.sessionID,
+              ...failClosedNotification({ action: evaluation.action, error }),
+            });
+          }
+        },
+      );
+
+      const toolRegistration = await context.tool.hook("execute.before", async (event) => {
+        if (reviewer.isReviewerSession(event.sessionID)) {
+          assertReviewerTool(event.tool);
           return;
+        }
+
+        if (yoloCommand.isEnabled()) {
+          await notify({
+            sessionID: event.sessionID,
+            ...yoloAcceptNotification({ action: event.tool }),
+          });
+          return;
+        }
+
+        if (!autoApproveCommand.isEnabled() || configuration.mode !== "all-tools") return;
 
         let decision: ReviewVerdict;
         try {
+          const reviewContext = await loadReviewContext(context, {
+            sessionID: event.sessionID,
+            messageID: event.messageID,
+          });
           decision = await reviewer.review({
             source: "tool-call",
             sessionID: event.sessionID,
             action: event.tool,
-            resource: output.args,
-            userIntent: intents.get(event.sessionID),
-            model: models.get(event.sessionID),
+            resource: event.input,
+            ...(reviewContext.userIntent === undefined
+              ? {}
+              : { userIntent: reviewContext.userIntent }),
+            ...(reviewContext.model === undefined ? {} : { model: reviewContext.model }),
           });
         } catch (error) {
-          await notify(failClosedNotification({ action: event.tool, error }));
+          await notify({
+            sessionID: event.sessionID,
+            ...failClosedNotification({ action: event.tool, error }),
+          });
           throw new Error(
             `Auto-approval reviewer failed; human review is required. ${errorMessage(error)}`,
             { cause: error },
           );
         }
 
-        await notify(decisionNotification({ action: event.tool, decision }));
+        await notify({
+          sessionID: event.sessionID,
+          ...decisionNotification({ action: event.tool, decision }),
+        });
         if (decision.verdict === "allow") return;
+
         const outcome = decision.verdict === "deny" ? "denied" : "requires human review";
         throw new Error(`Auto-approval reviewer ${outcome}: ${decision.reason}`);
-      },
-      dispose: () => {
-        models.clear();
-        intents.clear();
-        return Promise.resolve();
-      },
-    };
-  };
+      });
+
+      const sessionRegistration = await context.session.hook("context", (request) => {
+        if (!reviewer.isReviewerSession(request.sessionID)) return;
+        applyReviewerContext(request);
+        disableReasoning({ providerID: request.model.providerID, options: request.options });
+      });
+
+      const commandRegistration = await context.command.transform((editor) => {
+        editor.add({
+          name: "auto-approve",
+          description: "Enable or disable the auto-approval reviewer.",
+          execute: async (invocation) => {
+            await autoApproveCommand.execute({
+              arguments: invocation.prompt.text,
+              sessionID: invocation.sessionID,
+            });
+            if (autoApproveCommand.isEnabled()) yoloCommand.disable();
+          },
+        });
+        editor.add({
+          name: "yolo",
+          description: "Automatically accept any permission request without review.",
+          execute: async (invocation) => {
+            await yoloCommand.execute({
+              arguments: invocation.prompt.text,
+              sessionID: invocation.sessionID,
+            });
+            if (yoloCommand.isEnabled()) autoApproveCommand.disable();
+          },
+        });
+      });
+      await context.command.reload();
+
+      await reviewer.reconcile();
+
+      return async () => {
+        reviewer.dispose();
+        await commandRegistration.dispose();
+        await permissionRegistration.dispose();
+        await toolRegistration.dispose();
+        await sessionRegistration.dispose();
+        await rpc.dispose();
+      };
+    },
+  });
 }

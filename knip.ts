@@ -1,9 +1,8 @@
 import { type KnipConfig } from "knip";
 
 const config: KnipConfig = {
-  // `src/index.ts` is auto-detected from package.json `exports`/`main`/`module`.
-  // Test files are listed explicitly because no enabled plugin covers them.
-  entry: ["src/**/*.test.ts"],
+  // Every published entrypoint and test file is analyzed so unused exports surface in CI.
+  entry: ["src/**/*.test.ts", "scripts/**/*.mjs"],
   project: ["src/**/*.ts"],
   ignoreDependencies: [
     // Referenced from .secretlintrc.json rather than imported from source.

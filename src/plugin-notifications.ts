@@ -1,6 +1,12 @@
-import type { ReviewVerdict } from "./reviewer.js";
+import type { ReviewVerdict } from "./reviewer.ts";
 
 export type ToastVariant = "info" | "success" | "warning" | "error";
+
+export type Notification = {
+  sessionID: string;
+  message: string;
+  variant: ToastVariant;
+};
 
 export function decisionNotification(input: { action: string; decision: ReviewVerdict }): {
   message: string;
@@ -25,6 +31,16 @@ export function failClosedNotification(input: { action: string; error: unknown }
   return {
     message: `[Auto-approval] reviewer failed for \`${input.action}\`\n\n${errorMessage(input.error)}`,
     variant: "error",
+  };
+}
+
+export function yoloAcceptNotification(input: { action: string }): {
+  message: string;
+  variant: ToastVariant;
+} {
+  return {
+    message: `[Yolo] auto-accepted \`${input.action}\``,
+    variant: "success",
   };
 }
 

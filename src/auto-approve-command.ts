@@ -1,29 +1,34 @@
-import type { ToastVariant } from "./plugin-notifications.js";
+import type { Notification } from "./plugin-notifications.ts";
 
 type AutoApproveCommandDependencies = {
-  notify(input: { message: string; variant: ToastVariant }): Promise<void>;
+  notify(input: Notification): Promise<void>;
+};
+
+type CommandInput = {
+  arguments: string;
+  sessionID: string;
 };
 
 export function createAutoApproveCommandHandler(input: AutoApproveCommandDependencies) {
   let enabled = false;
 
   return {
-    execute: async (event: { arguments: string }, output: { parts: unknown[] }): Promise<never> => {
-      output.parts.splice(0);
-      const value = event.arguments.trim();
+    execute: async (command: CommandInput): Promise<void> => {
+      const value = command.arguments.trim();
       if (value !== "true" && value !== "false") {
         enabled = !enabled;
       } else {
         enabled = value === "true";
       }
       await input.notify({
+        sessionID: command.sessionID,
         message: `Auto-approval reviewer ${enabled ? "enabled" : "disabled"}.`,
         variant: "success",
       });
-
-      // OpenCode 1.18 calls the agent even with no parts, so abort after handling the command.
-      throw new Error("Auto-approve command handled.");
     },
     isEnabled: () => enabled,
+    disable: () => {
+      enabled = false;
+    },
   };
 }

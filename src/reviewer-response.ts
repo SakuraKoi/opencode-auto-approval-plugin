@@ -1,37 +1,18 @@
-import type { ReviewVerdict } from "./reviewer.js";
+import type { ReviewVerdict } from "./reviewer.ts";
+import type { SessionMessages } from "./todo-context.ts";
 
-export function sessionIdentifier(input: unknown): string {
-  if (
-    typeof input === "object" &&
-    input !== null &&
-    "id" in input &&
-    typeof input.id === "string"
-  ) {
-    return input.id;
+/** Returns the text of the newest assistant message that produced any text. */
+export function reviewerResponseText(messages: SessionMessages): string {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.type !== "assistant" || !message.content) continue;
+    const text = message.content
+      .flatMap((part) => (part.type === "text" ? [(part as { text?: unknown }).text] : []))
+      .filter((part): part is string => typeof part === "string")
+      .join("\n");
+    if (text.trim() !== "") return text;
   }
-  if (
-    typeof input === "object" &&
-    input !== null &&
-    "data" in input &&
-    typeof input.data === "object" &&
-    input.data !== null &&
-    "id" in input.data &&
-    typeof input.data.id === "string"
-  ) {
-    return input.data.id;
-  }
-  throw new Error("OpenCode SDK did not return a reviewer session ID.");
-}
-
-export function responseText(input: unknown): string {
-  const response = unwrapData(input);
-  if (!isRecord(response) || !Array.isArray(response.parts)) {
-    throw new Error("OpenCode SDK did not return reviewer message parts.");
-  }
-
-  return response.parts
-    .flatMap((part) => (isRecord(part) && typeof part.text === "string" ? [part.text] : []))
-    .join("\n");
+  throw new Error("Reviewer session did not produce a text response.");
 }
 
 export function parseVerdict(input: string): ReviewVerdict {
@@ -49,11 +30,6 @@ export function parseVerdict(input: string): ReviewVerdict {
 
 function isVerdict(input: unknown): input is ReviewVerdict["verdict"] {
   return input === "allow" || input === "deny" || input === "escalate";
-}
-
-function unwrapData(input: unknown): unknown {
-  if (isRecord(input) && "data" in input) return input.data;
-  return input;
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

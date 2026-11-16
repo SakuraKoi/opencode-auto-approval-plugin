@@ -1,443 +1,484 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { createAutoApprovalPlugin } from "./index.js";
-type ReviewerVerdict = "allow" | "deny" | "escalate";
+import { createAutoApprovalPlugin } from "./index.ts";
+import { applyReviewerContext } from "./reviewer-agent.ts";
 
-function createContext() {
+const originSessionID = "origin-session";
+const reviewerSessionID = "reviewer-session";
+
+type PermissionEvaluation = {
+  sessionID: string;
+  action: string;
+  resources: readonly string[];
+  metadata?: Record<string, unknown>;
+  source?: { type: "tool"; messageID: string; id: string };
+  effect: "allow" | "ask" | "deny";
+  message?: string;
+};
+
+type ToolEvent = {
+  tool: string;
+  sessionID: string;
+  agent: string;
+  messageID: string;
+  id: string;
+  input: unknown;
+};
+
+type SessionContextRequest = {
+  sessionID: string;
+  model: { providerID: string; id: string; variant?: string };
+  system: { type: "text"; text: string }[];
+  tools: Record<string, { description: string; input: unknown }>;
+  options: Record<string, unknown>;
+};
+
+type Notification = Record<string, unknown> & { sessionID: string; message: string };
+
+function transcript() {
+  return [
+    {
+      id: "user-message",
+      type: "user",
+      text: "Please clean up the generated build directory.",
+    },
+    {
+      id: "message-1",
+      type: "assistant",
+      model: { providerID: "anthropic", id: "origin-model", variant: "thinking" },
+      content: [
+        {
+          type: "tool",
+          name: "todowrite",
+          state: {
+            status: "completed",
+            input: {
+              todos: [
+                { content: "Inspect the build output", status: "completed" },
+                { content: "Remove generated files", status: "in_progress" },
+              ],
+            },
+          },
+        },
+      ],
+    },
+  ];
+}
+
+function createHarness(input: {
+  options?: unknown;
+  reviewerResponse?: string;
+  transcript?: ReadonlyArray<Record<string, unknown>>;
+}) {
+  const notifications: Notification[] = [];
+  const createdSessions: Record<string, unknown>[] = [];
+  const removedSessions: string[] = [];
+  const interruptedSessions: string[] = [];
+  const disposed: string[] = [];
+  const commands = new Map<
+    string,
+    { execute: (invocation: { sessionID: string; prompt: { text: string } }) => Promise<void> }
+  >();
+
+  let permissionHook: ((evaluation: PermissionEvaluation) => Promise<void>) | undefined;
+  let toolHook: ((event: ToolEvent) => Promise<void>) | undefined;
+  let sessionHook: ((request: SessionContextRequest) => Promise<void>) | undefined;
+  let duringReview: ((sessionID: string) => Promise<void> | void) | undefined;
+
+  const originMessages = input.transcript ?? transcript();
+  const reviewerMessages = [
+    {
+      id: "reviewer-message",
+      type: "assistant",
+      content: [
+        {
+          type: "text",
+          text: input.reviewerResponse ?? '{"verdict":"allow","reason":"safe to run"}',
+        },
+      ],
+    },
+  ];
+
+  function registration(name: string) {
+    return { dispose: async () => void disposed.push(name) };
+  }
+
+  const context = {
+    location: { directory: "/workspace" },
+    options: input.options ?? {},
+    permission: {
+      hook: async (name: string, callback: typeof permissionHook) => {
+        permissionHook = callback;
+        return registration(`permission:${name}`);
+      },
+    },
+    tool: {
+      hook: async (name: string, callback: typeof toolHook) => {
+        toolHook = callback;
+        return registration(`tool:${name}`);
+      },
+    },
+    session: {
+      hook: async (name: string, callback: typeof sessionHook) => {
+        sessionHook = callback;
+        return registration(`session:${name}`);
+      },
+      create: async (request: Record<string, unknown>) => {
+        createdSessions.push(request);
+        return { id: reviewerSessionID };
+      },
+      get: async () => ({ id: originSessionID, title: "Fix the build" }),
+      context: async (request: { sessionID: string }) =>
+        request.sessionID === reviewerSessionID ? reviewerMessages : originMessages,
+      prompt: async (request: { sessionID: string; text: string }) => {
+        if (duringReview) await duringReview(request.sessionID);
+      },
+      wait: async () => undefined,
+      interrupt: async (request: { sessionID: string }) => {
+        interruptedSessions.push(request.sessionID);
+      },
+      remove: async (request: { sessionID: string }) => {
+        removedSessions.push(request.sessionID);
+      },
+      list: async () => ({ data: [], cursor: { next: null } }),
+    },
+    command: {
+      transform: async (
+        callback: (editor: {
+          add: (definition: {
+            name: string;
+            execute: (invocation: { sessionID: string; prompt: { text: string } }) => Promise<void>;
+          }) => void;
+        }) => void,
+      ) => {
+        callback({ add: (definition) => void commands.set(definition.name, definition) });
+        return registration("command");
+      },
+      reload: async () => undefined,
+    },
+    rpc: {
+      register: async () => ({
+        events: {
+          emit: async (_name: string, data: Notification) => {
+            notifications.push(data);
+          },
+        },
+        dispose: async () => void disposed.push("rpc"),
+      }),
+    },
+  };
+
   return {
-    context: {
-      client: {},
-      directory: "/workspace",
+    context,
+    notifications,
+    createdSessions,
+    removedSessions,
+    interruptedSessions,
+    disposed,
+    commands,
+    get permissionHook() {
+      if (!permissionHook) throw new Error("permission hook was not registered");
+      return permissionHook;
+    },
+    get toolHook() {
+      if (!toolHook) throw new Error("tool hook was not registered");
+      return toolHook;
+    },
+    get sessionHook() {
+      if (!sessionHook) throw new Error("session hook was not registered");
+      return sessionHook;
+    },
+    setDuringReview(callback: (sessionID: string) => Promise<void> | void) {
+      duringReview = callback;
     },
   };
 }
 
-function createPlugin(input: { reviewError?: Error; verdict: ReviewerVerdict }) {
-  const review = vi.fn(async () => {
-    if (input.reviewError) throw input.reviewError;
-    return { verdict: input.verdict, reason: "reviewed" };
-  });
-  const isReviewerSession = vi.fn(() => false);
-  const replyToPermission = vi.fn(async () => undefined);
-  const showToast = vi.fn(async () => undefined);
-  const plugin = createAutoApprovalPlugin({
-    dependencies: {
-      createReviewer: () => ({ review, isReviewerSession }) as never,
-      replyToPermission,
-      showToast,
-    },
-  });
-  return { plugin, review, isReviewerSession, replyToPermission, showToast };
+async function setup(input: {
+  options?: unknown;
+  reviewerResponse?: string;
+  transcript?: ReadonlyArray<Record<string, unknown>>;
+}) {
+  const harness = createHarness(input);
+  const cleanup = await createAutoApprovalPlugin().setup(harness.context as never);
+  return { ...harness, cleanup };
 }
 
-function permissionAskedEvent(input: { id: string }) {
+function permissionRequest(input: Partial<PermissionEvaluation> = {}): PermissionEvaluation {
   return {
-    event: {
-      type: "permission.asked" as never,
-      properties: {
-        id: input.id,
-        sessionID: "session-1",
-        permission: "bash",
-        patterns: ["git status"],
-        metadata: {},
-        always: [],
-      },
-    },
+    sessionID: originSessionID,
+    action: "bash",
+    resources: ["rm -rf build"],
+    metadata: { command: "rm -rf build" },
+    source: { type: "tool", messageID: "message-1", id: "call-1" },
+    effect: "ask",
+    ...input,
   };
 }
 
-async function enableReviewer(
-  hooks: Awaited<ReturnType<ReturnType<typeof createAutoApprovalPlugin>>>,
-) {
-  const parts = [{ type: "text", text: "true" }];
-  const output = { parts };
-  await expect(
-    hooks["command.execute.before"]?.(
-      { command: "auto-approve", sessionID: "session-1", arguments: "true" },
-      output as never,
-    ),
-  ).rejects.toThrow("Auto-approve command handled.");
-  expect(output.parts).toBe(parts);
-  expect(parts).toEqual([]);
+function toolEvent(input: Partial<ToolEvent> = {}): ToolEvent {
+  return {
+    tool: "bash",
+    sessionID: originSessionID,
+    agent: "build",
+    messageID: "message-1",
+    id: "call-1",
+    input: { command: "rm -rf build" },
+    ...input,
+  };
 }
 
-describe("auto approval plugin", () => {
-  it("registers the auto-approve command and starts disabled", async () => {
-    const { context } = createContext();
-    const { plugin, review } = createPlugin({ verdict: "allow" });
-    const hooks = await plugin(context as never, { mode: "on-ask" });
-    const config = {} as { agent?: Record<string, unknown>; command?: Record<string, unknown> };
+async function enableAutoApprove(harness: Awaited<ReturnType<typeof setup>>) {
+  const command = harness.commands.get("auto-approve");
+  if (!command) throw new Error("auto-approve command was not registered");
+  await command.execute({ sessionID: originSessionID, prompt: { text: "" } });
+}
 
-    await hooks.config?.(config as never);
-    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
+async function enableYolo(harness: Awaited<ReturnType<typeof setup>>) {
+  const command = harness.commands.get("yolo");
+  if (!command) throw new Error("yolo command was not registered");
+  await command.execute({ sessionID: originSessionID, prompt: { text: "" } });
+}
 
-    expect(config.command?.["auto-approve"]).toEqual({
-      description: "Enable or disable the auto-approval reviewer.",
-      template: "$ARGUMENTS",
-    });
-    expect(review).not.toHaveBeenCalled();
+describe("createAutoApprovalPlugin", () => {
+  it("leaves ask decisions untouched while disabled", async () => {
+    const harness = await setup({});
+
+    const evaluation = permissionRequest();
+    await harness.permissionHook(evaluation);
+
+    expect(evaluation.effect).toBe("ask");
+    expect(harness.notifications).toEqual([]);
+    expect(harness.createdSessions).toEqual([]);
   });
 
-  it("enables and disables the reviewer through the command", async () => {
-    const { context } = createContext();
-    const { plugin, review, showToast } = createPlugin({ verdict: "allow" });
-    const hooks = await plugin(context as never, {});
+  it("leaves explicitly allowed decisions untouched", async () => {
+    const harness = await setup({});
+    await enableAutoApprove(harness);
 
-    await enableReviewer(hooks);
-    expect(showToast).toHaveBeenCalledWith({
-      client: context.client,
-      directory: context.directory,
+    const evaluation = permissionRequest({ effect: "allow" });
+    await harness.permissionHook(evaluation);
+
+    expect(evaluation.effect).toBe("allow");
+    expect(harness.createdSessions).toEqual([]);
+  });
+
+  it("auto-approves ask decisions with transcript context", async () => {
+    const harness = await setup({});
+    await enableAutoApprove(harness);
+    expect(harness.notifications.at(-1)).toMatchObject({
+      sessionID: originSessionID,
       message: "Auto-approval reviewer enabled.",
+    });
+
+    const evaluation = permissionRequest();
+    await harness.permissionHook(evaluation);
+
+    expect(evaluation.effect).toBe("allow");
+    expect(harness.createdSessions[0]).toMatchObject({
+      title: "opencode-auto-approve-reviewer",
+      metadata: { autoApprovalReviewer: true },
+      model: { providerID: "anthropic", id: "origin-model", variant: "thinking" },
+    });
+    expect(harness.notifications.at(-1)).toMatchObject({
+      sessionID: originSessionID,
       variant: "success",
     });
-    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
-    expect(review).toHaveBeenCalledOnce();
-
-    const parts = [{ type: "text", text: "false" }];
-    const output = { parts };
-    await expect(
-      hooks["command.execute.before"]?.(
-        { command: "auto-approve", sessionID: "session-1", arguments: "false" },
-        output as never,
-      ),
-    ).rejects.toThrow("Auto-approve command handled.");
-    expect(output.parts).toBe(parts);
-    expect(parts).toEqual([]);
-    expect(showToast).toHaveBeenLastCalledWith({
-      client: context.client,
-      directory: context.directory,
-      message: "Auto-approval reviewer disabled.",
-      variant: "success",
-    });
-    await hooks.event?.(permissionAskedEvent({ id: "permission-2" }) as never);
-    expect(review).toHaveBeenCalledOnce();
+    expect(harness.notifications.at(-1)?.message).toContain("reviewer allowed `bash`");
+    expect(harness.notifications.at(-1)?.message).toContain("safe to run");
+    expect(harness.removedSessions).toEqual([reviewerSessionID]);
   });
 
-  it("toggles the reviewer for an unrecognized command argument", async () => {
-    const { context } = createContext();
-    const { plugin, review, showToast } = createPlugin({ verdict: "allow" });
-    const hooks = await plugin(context as never, {});
-    const parts = [{ type: "text", text: "yes" }];
-    const output = { parts };
-
-    await expect(
-      hooks["command.execute.before"]?.(
-        { command: "auto-approve", sessionID: "session-1", arguments: "yes" },
-        output as never,
-      ),
-    ).rejects.toThrow("Auto-approve command handled.");
-    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
-
-    expect(output.parts).toBe(parts);
-    expect(parts).toEqual([]);
-    expect(showToast).toHaveBeenNthCalledWith(1, {
-      client: context.client,
-      directory: context.directory,
-      message: "Auto-approval reviewer enabled.",
-      variant: "success",
+  it("denies when the reviewer denies", async () => {
+    const harness = await setup({
+      reviewerResponse: '{"verdict":"deny","reason":"destructive command"}',
     });
-    expect(review).toHaveBeenCalledOnce();
-    expect(showToast).toHaveBeenLastCalledWith({
-      client: context.client,
-      directory: context.directory,
-      message: "[Auto-approval] reviewer allowed `bash`\n\nreviewed",
-      variant: "success",
-    });
+    await enableAutoApprove(harness);
+
+    const evaluation = permissionRequest();
+    await harness.permissionHook(evaluation);
+
+    expect(evaluation.effect).toBe("deny");
+    expect(evaluation.message).toBe("destructive command");
+    expect(harness.notifications.at(-1)).toMatchObject({ variant: "warning" });
+    expect(harness.notifications.at(-1)?.message).toContain("reviewer denied");
   });
 
-  it("auto-approves an ask request and shows the reviewer reason", async () => {
-    const { context } = createContext();
-    const { plugin, review, replyToPermission, showToast } = createPlugin({ verdict: "allow" });
-    const hooks = await plugin(context as never, {});
-    await enableReviewer(hooks);
-
-    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
-
-    expect(review).toHaveBeenCalledOnce();
-    expect(replyToPermission).toHaveBeenCalledWith({
-      client: {},
-      directory: "/workspace",
-      reply: "once",
-      requestID: "permission-1",
+  it("escalates by leaving the human prompt in place", async () => {
+    const harness = await setup({
+      reviewerResponse: '{"verdict":"escalate","reason":"needs a human"}',
     });
-    expect(showToast).toHaveBeenLastCalledWith({
-      client: context.client,
-      directory: context.directory,
-      message: "[Auto-approval] reviewer allowed `bash`\n\nreviewed",
-      variant: "success",
+    await enableAutoApprove(harness);
+
+    const evaluation = permissionRequest();
+    await harness.permissionHook(evaluation);
+
+    expect(evaluation.effect).toBe("ask");
+    expect(evaluation.message).toBe("needs a human");
+    expect(harness.notifications.at(-1)?.message).toContain("reviewer escalated");
+  });
+
+  it("fails closed when the reviewer fails", async () => {
+    const harness = await setup({ reviewerResponse: "not JSON" });
+    await enableAutoApprove(harness);
+
+    const evaluation = permissionRequest();
+    await harness.permissionHook(evaluation);
+
+    expect(evaluation.effect).toBe("ask");
+    expect(harness.interruptedSessions).toEqual([reviewerSessionID]);
+    expect(harness.notifications.at(-1)).toMatchObject({ variant: "error" });
+    expect(harness.notifications.at(-1)?.message).toContain("reviewer failed for `bash`");
+  });
+
+  it("lets yolo auto-approve without invoking the reviewer", async () => {
+    const harness = await setup({});
+    await enableYolo(harness);
+    expect(harness.notifications.at(-1)?.message).toBe("Yolo mode enabled.");
+
+    const evaluation = permissionRequest();
+    await harness.permissionHook(evaluation);
+
+    expect(evaluation.effect).toBe("allow");
+    expect(harness.createdSessions).toEqual([]);
+    expect(harness.notifications.at(-1)).toMatchObject({
+      sessionID: originSessionID,
+      message: "[Yolo] auto-accepted `bash`",
     });
   });
 
-  it("leaves an ask request for a human and shows a toast when the reviewer escalates", async () => {
-    const { context } = createContext();
-    const { plugin, replyToPermission, showToast } = createPlugin({ verdict: "escalate" });
-    const hooks = await plugin(context as never, {});
-    await enableReviewer(hooks);
+  it("keeps auto-approval and yolo mutually exclusive", async () => {
+    const harness = await setup({});
+    await enableYolo(harness);
+    await enableAutoApprove(harness);
 
-    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
+    const evaluation = permissionRequest();
+    await harness.permissionHook(evaluation);
 
-    expect(replyToPermission).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenLastCalledWith({
-      client: context.client,
-      directory: context.directory,
-      message: "[Auto-approval] reviewer escalated `bash`\n\nreviewed",
-      variant: "warning",
-    });
+    expect(evaluation.effect).toBe("allow");
+    expect(harness.createdSessions).toHaveLength(1);
+    expect(harness.notifications.at(-1)?.message).toContain("reviewer allowed");
   });
 
-  it("leaves an ask request for a human and shows a toast when reviewing fails", async () => {
-    const { context } = createContext();
-    const { plugin, replyToPermission, showToast } = createPlugin({
-      reviewError: new Error("review failed"),
-      verdict: "allow",
-    });
-    const hooks = await plugin(context as never, {});
-    await enableReviewer(hooks);
+  it("reviews tool calls in all-tools mode", async () => {
+    const harness = await setup({ options: { mode: "all-tools" } });
+    await enableAutoApprove(harness);
 
-    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
-
-    expect(replyToPermission).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenLastCalledWith({
-      client: context.client,
-      directory: context.directory,
-      message: "[Auto-approval] reviewer failed for `bash`\n\nreview failed",
-      variant: "error",
-    });
+    await expect(harness.toolHook(toolEvent())).resolves.toBeUndefined();
+    expect(harness.createdSessions).toHaveLength(1);
+    expect(harness.notifications.at(-1)?.message).toContain("reviewer allowed `bash`");
   });
 
-  it("rejects an ask request and shows the reviewer reason when the reviewer denies it", async () => {
-    const { context } = createContext();
-    const { plugin, replyToPermission, showToast } = createPlugin({ verdict: "deny" });
-    const hooks = await plugin(context as never, {});
-    await enableReviewer(hooks);
-
-    await hooks.event?.(permissionAskedEvent({ id: "permission-1" }) as never);
-
-    expect(replyToPermission).toHaveBeenCalledWith({
-      client: {},
-      directory: "/workspace",
-      message: "reviewed",
-      reply: "reject",
-      requestID: "permission-1",
+  it("blocks tool calls when the reviewer denies", async () => {
+    const harness = await setup({
+      options: { mode: "all-tools" },
+      reviewerResponse: '{"verdict":"deny","reason":"destructive"}',
     });
-    expect(showToast).toHaveBeenLastCalledWith({
-      client: context.client,
-      directory: context.directory,
-      message: "[Auto-approval] reviewer denied `bash`\n\nreviewed",
-      variant: "warning",
-    });
-  });
+    await enableAutoApprove(harness);
 
-  it("blocks an allow-listed tool when all-tools review escalates", async () => {
-    const { context } = createContext();
-    const { plugin, showToast } = createPlugin({ verdict: "escalate" });
-    const hooks = await plugin(context as never, { mode: "all-tools" });
-    await enableReviewer(hooks);
-
-    await expect(
-      hooks["tool.execute.before"]?.(
-        { tool: "bash", sessionID: "session-1", callID: "call-1" },
-        { args: { command: "git push" } },
-      ),
-    ).rejects.toThrow("requires human review");
-    expect(showToast).toHaveBeenLastCalledWith({
-      client: context.client,
-      directory: context.directory,
-      message: "[Auto-approval] reviewer escalated `bash`\n\nreviewed",
-      variant: "warning",
-    });
-  });
-
-  it("provides the latest user message and model todos to the reviewer", async () => {
-    const { context } = createContext();
-    const { plugin, review } = createPlugin({ verdict: "allow" });
-    const hooks = await plugin(context as never, { mode: "all-tools" });
-    await enableReviewer(hooks);
-
-    await hooks.event?.({
-      event: {
-        type: "session.created",
-        properties: {
-          info: { id: "session-1", title: "Refactor auto-approval context" },
-        },
-      },
-    } as never);
-    await hooks["chat.message"]?.(
-      {
-        sessionID: "session-1",
-        model: { providerID: "openai", modelID: "gpt-5.6" },
-      },
-      { parts: [{ type: "text", text: "Refactor the permission context." }] } as never,
+    await expect(harness.toolHook(toolEvent())).rejects.toThrow(
+      "Auto-approval reviewer denied: destructive",
     );
-    await hooks.event?.({
-      event: {
-        type: "todo.updated",
-        properties: {
-          sessionID: "session-1",
-          todos: [
-            {
-              id: "todo-1",
-              content: "Update the reviewer request",
-              status: "in_progress",
-              priority: "high",
-            },
-          ],
-        },
+  });
+
+  it("blocks tool calls when the reviewer fails", async () => {
+    const harness = await setup({ options: { mode: "all-tools" }, reviewerResponse: "not JSON" });
+    await enableAutoApprove(harness);
+
+    await expect(harness.toolHook(toolEvent())).rejects.toThrow(
+      "Auto-approval reviewer failed; human review is required.",
+    );
+    expect(harness.notifications.at(-1)).toMatchObject({ variant: "error" });
+  });
+
+  it("does not review tool calls in on-ask mode", async () => {
+    const harness = await setup({});
+    await enableAutoApprove(harness);
+
+    await expect(harness.toolHook(toolEvent())).resolves.toBeUndefined();
+    expect(harness.createdSessions).toEqual([]);
+  });
+
+  it("restricts the reviewer session to a read-only allowlist", async () => {
+    const harness = await setup({});
+    await enableAutoApprove(harness);
+
+    const reviewerEvaluations: PermissionEvaluation[] = [];
+    harness.setDuringReview(async (sessionID) => {
+      for (const action of ["write", "bash", "read"]) {
+        const evaluation = permissionRequest({
+          sessionID,
+          action,
+          resources: ["*"],
+          effect: "ask",
+        });
+        await harness.permissionHook(evaluation);
+        reviewerEvaluations.push(evaluation);
+      }
+    });
+
+    await harness.permissionHook(permissionRequest());
+
+    expect(reviewerEvaluations.map((evaluation) => evaluation.effect)).toEqual([
+      "deny",
+      "deny",
+      "ask",
+    ]);
+    expect(reviewerEvaluations[0]?.message).toContain("may not use the write action");
+    expect(harness.createdSessions).toHaveLength(1);
+  });
+
+  it("applies the reviewer persona and disables reasoning", async () => {
+    const harness = await setup({
+      options: {
+        reviewer: { model: { providerID: "anthropic", modelID: "reviewer-model" } },
       },
     });
+    await enableAutoApprove(harness);
 
-    await hooks["tool.execute.before"]?.(
-      { tool: "edit", sessionID: "session-1", callID: "call-1" },
-      { args: { filePath: "src/reviewer.ts" } },
-    );
-    expect(review).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        userIntent: {
-          title: "Refactor auto-approval context",
-          lastMessage: "Refactor the permission context.",
-          todos: [
-            {
-              id: "todo-1",
-              content: "Update the reviewer request",
-              status: "in_progress",
-              priority: "high",
-            },
-          ],
+    const requests: SessionContextRequest[] = [];
+    harness.setDuringReview(async (sessionID) => {
+      const request: SessionContextRequest = {
+        sessionID,
+        model: { providerID: "anthropic", id: "reviewer-model" },
+        system: [],
+        tools: {
+          read: { description: "read", input: {} },
+          write: { description: "write", input: {} },
+          bash: { description: "bash", input: {} },
         },
-      }),
-    );
-
-    await hooks["chat.message"]?.({ sessionID: "session-1" }, {
-      parts: [{ type: "text", text: "Also update the tests." }],
-    } as never);
-    await hooks.event?.({
-      event: {
-        type: "session.updated",
-        properties: {
-          info: { id: "session-1", title: "Refactor reviewer tests" },
-        },
-      },
-    } as never);
-    await hooks["tool.execute.before"]?.(
-      { tool: "edit", sessionID: "session-1", callID: "call-2" },
-      { args: { filePath: "src/index.test.ts" } },
-    );
-    expect(review).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        userIntent: {
-          title: "Refactor reviewer tests",
-          lastMessage: "Also update the tests.",
-          todos: [
-            {
-              id: "todo-1",
-              content: "Update the reviewer request",
-              status: "in_progress",
-              priority: "high",
-            },
-          ],
-        },
-      }),
-    );
-
-    await hooks.event?.({
-      event: {
-        type: "todo.updated",
-        properties: { sessionID: "session-1", todos: [] },
-      },
+        options: {},
+      };
+      await harness.sessionHook(request);
+      requests.push(request);
     });
-    await hooks["tool.execute.before"]?.(
-      { tool: "read", sessionID: "session-1", callID: "call-3" },
-      { args: { filePath: "src/index.ts" } },
-    );
-    expect(review).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        userIntent: {
-          title: "Refactor reviewer tests",
-          lastMessage: "Also update the tests.",
-        },
-      }),
-    );
 
-    await hooks.event?.({
-      event: {
-        type: "session.deleted",
-        properties: { info: { id: "session-1" } },
-      },
-    } as never);
-    await hooks["tool.execute.before"]?.(
-      { tool: "read", sessionID: "session-1", callID: "call-4" },
-      { args: { filePath: "README.md" } },
-    );
-    expect(review).toHaveBeenLastCalledWith({
-      source: "tool-call",
-      sessionID: "session-1",
-      action: "read",
-      resource: { filePath: "README.md" },
-      userIntent: undefined,
-      model: undefined,
-    });
+    await harness.permissionHook(permissionRequest());
+
+    expect(requests).toHaveLength(1);
+    const request = requests[0];
+    expect(request?.system[0]?.text).toContain("read-only security reviewer");
+    expect(Object.keys(request?.tools ?? {})).toEqual(["read"]);
+    expect(request?.options).toEqual({ thinking: { type: "disabled" } });
   });
 
-  it("blocks an allow-listed tool and shows a toast when reviewing fails", async () => {
-    const { context } = createContext();
-    const { plugin, showToast } = createPlugin({
-      reviewError: new Error("review failed"),
-      verdict: "allow",
-    });
-    const hooks = await plugin(context as never, { mode: "all-tools" });
-    await enableReviewer(hooks);
-
-    await expect(
-      hooks["tool.execute.before"]?.(
-        { tool: "bash", sessionID: "session-1", callID: "call-1" },
-        { args: { command: "git push" } },
-      ),
-    ).rejects.toThrow("review failed");
-    expect(showToast).toHaveBeenLastCalledWith({
-      client: context.client,
-      directory: context.directory,
-      message: "[Auto-approval] reviewer failed for `bash`\n\nreview failed",
-      variant: "error",
-    });
+  it("filters reviewer tools through the shared helper", () => {
+    const tools: Record<string, unknown> = { read: {}, glob: {}, grep: {}, edit: {} };
+    applyReviewerContext({ system: [], tools });
+    expect(Object.keys(tools)).toEqual(["read", "glob", "grep"]);
   });
 
-  it("permits an allow-listed tool and shows the reviewer reason when all-tools review allows it", async () => {
-    const { context } = createContext();
-    const { plugin, showToast } = createPlugin({ verdict: "allow" });
-    const hooks = await plugin(context as never, { mode: "all-tools" });
-    await enableReviewer(hooks);
+  it("disposes every registration on cleanup", async () => {
+    const harness = await setup({});
 
-    await expect(
-      hooks["tool.execute.before"]?.(
-        { tool: "read", sessionID: "session-1", callID: "call-1" },
-        { args: { filePath: "README.md" } },
-      ),
-    ).resolves.toBeUndefined();
-    expect(showToast).toHaveBeenLastCalledWith({
-      client: context.client,
-      directory: context.directory,
-      message: "[Auto-approval] reviewer allowed `read`\n\nreviewed",
-      variant: "success",
-    });
-  });
+    await harness.cleanup?.();
 
-  it("shows the reviewer reason before blocking a tool denied in all-tools mode", async () => {
-    const { context } = createContext();
-    const { plugin, showToast } = createPlugin({ verdict: "deny" });
-    const hooks = await plugin(context as never, { mode: "all-tools" });
-    await enableReviewer(hooks);
-
-    await expect(
-      hooks["tool.execute.before"]?.(
-        { tool: "bash", sessionID: "session-1", callID: "call-1" },
-        { args: { command: "git push" } },
-      ),
-    ).rejects.toThrow("Auto-approval reviewer denied: reviewed");
-    expect(showToast).toHaveBeenLastCalledWith({
-      client: context.client,
-      directory: context.directory,
-      message: "[Auto-approval] reviewer denied `bash`\n\nreviewed",
-      variant: "warning",
-    });
+    expect(harness.disposed).toEqual([
+      "command",
+      "permission:evaluate",
+      "tool:execute.before",
+      "session:context",
+      "rpc",
+    ]);
   });
 });

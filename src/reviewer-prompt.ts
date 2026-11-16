@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { ReviewRequest } from "./reviewer.js";
+import type { ReviewRequest } from "./reviewer.ts";
 
 export function reviewerPrompt(input: ReviewRequest): string {
   const boundary = `UNTRUSTED_OPERATION_${randomUUID()}`;

@@ -1,8 +1,16 @@
-import type { ModelReference, PluginConfiguration } from "./config.js";
-import { reviewerAgentName, reviewerTools } from "./reviewer-agent.js";
-import { reviewerPrompt } from "./reviewer-prompt.js";
-import { parseVerdict, responseText, sessionIdentifier } from "./reviewer-response.js";
-import { withTimeout } from "./reviewer-timeout.js";
+import type { Plugin } from "@opencode/plugin";
+
+import type { ModelReference, PluginConfiguration } from "./config.ts";
+import {
+  reviewerMetadataKey,
+  reviewerPermissions,
+  reviewerSessionTitle,
+  sessionModel,
+} from "./reviewer-agent.ts";
+import type { UserIntent } from "./reviewer-context.ts";
+import { reviewerPrompt } from "./reviewer-prompt.ts";
+import { parseVerdict, reviewerResponseText } from "./reviewer-response.ts";
+import { withTimeout } from "./reviewer-timeout.ts";
 
 export type ReviewRequest = {
   source: "permission-request" | "tool-call";
@@ -13,97 +21,95 @@ export type ReviewRequest = {
   model?: ModelReference;
 };
 
-import type { UserIntent } from "./user-intent.js";
-
 export type ReviewVerdict = {
   verdict: "allow" | "deny" | "escalate";
   reason: string;
 };
 
-export type ReviewSessionClient = {
-  session: {
-    create(input: { body: { title: string }; query: { directory: string } }): Promise<unknown>;
-    delete(input: { path: { id: string }; query: { directory: string } }): Promise<unknown>;
-    prompt(input: {
-      path: { id: string };
-      query: { directory: string };
-      body: {
-        agent: string;
-        model?: ModelReference;
-        parts: Array<{ type: "text"; text: string }>;
-        tools: Record<string, boolean>;
-      };
-    }): Promise<unknown>;
-    abort?(input: { path: { id: string }; query: { directory: string } }): Promise<unknown>;
-  };
-};
-
 export class Reviewer {
-  readonly #client: ReviewSessionClient;
+  readonly #context: Plugin.Context;
   readonly #configuration: PluginConfiguration;
-  readonly #directory: string;
   readonly #reviewerSessionIDs = new Set<string>();
 
-  constructor(input: {
-    client: ReviewSessionClient;
-    configuration: PluginConfiguration;
-    directory: string;
-  }) {
-    this.#client = input.client;
+  constructor(input: { context: Plugin.Context; configuration: PluginConfiguration }) {
+    this.#context = input.context;
     this.#configuration = input.configuration;
-    this.#directory = input.directory;
   }
 
-  isReviewerSession(input: { sessionID: string }): boolean {
-    return this.#reviewerSessionIDs.has(input.sessionID);
+  isReviewerSession(sessionID: string): boolean {
+    return this.#reviewerSessionIDs.has(sessionID);
   }
 
   async review(input: ReviewRequest): Promise<ReviewVerdict> {
-    const session = await this.#client.session.create({
-      body: { title: "opencode-auto-approve-reviewer" },
-      query: { directory: this.#directory },
+    const model = this.#configuration.reviewer.model ?? input.model;
+    const session = await this.#context.session.create({
+      title: reviewerSessionTitle,
+      location: { directory: this.#context.location.directory },
+      metadata: { [reviewerMetadataKey]: true },
+      ...(model === undefined ? {} : { model: sessionModel(model) }),
+      permissions: reviewerPermissions,
     });
-    const sessionID = sessionIdentifier(session);
+    const sessionID = session.id;
     this.#reviewerSessionIDs.add(sessionID);
 
     try {
-      const response = await withTimeout({
-        operation: this.#client.session.prompt({
-          path: { id: sessionID },
-          query: { directory: this.#directory },
-          body: {
-            agent: reviewerAgentName,
-            ...((this.#configuration.reviewer.model ?? input.model)
-              ? { model: this.#configuration.reviewer.model ?? input.model }
-              : {}),
-            parts: [{ type: "text", text: reviewerPrompt(input) }],
-            tools: reviewerTools,
-          },
-        }),
+      const messages = await withTimeout({
         timeoutMs: this.#configuration.reviewer.timeoutMs,
+        operation: this.#run({ sessionID, prompt: reviewerPrompt(input) }),
       });
-      return parseVerdict(responseText(response));
+      return parseVerdict(reviewerResponseText(messages));
     } catch (error) {
       try {
-        await this.#client.session.abort?.({
-          path: { id: sessionID },
-          query: { directory: this.#directory },
-        });
+        await this.#context.session.interrupt({ sessionID });
       } catch {
-        // Preserve the original review error if aborting also fails.
+        // Preserve the original review error if interrupting also fails.
       }
       throw error;
     } finally {
       try {
-        await this.#client.session.delete({
-          path: { id: sessionID },
-          query: { directory: this.#directory },
-        });
+        await this.#context.session.remove({ sessionID });
       } catch {
         // Session cleanup is best-effort and must not change the review result.
       } finally {
         this.#reviewerSessionIDs.delete(sessionID);
       }
     }
+  }
+
+  /**
+   * Removes reviewer sessions left behind by a previous process. Best-effort: a failure here
+   * must never prevent the plugin from loading.
+   */
+  async reconcile(): Promise<void> {
+    try {
+      const sessions = await this.#context.session.list({
+        directory: this.#context.location.directory,
+        search: reviewerSessionTitle,
+        limit: 100,
+      });
+      await Promise.all(
+        sessions.data.map(async (session) => {
+          if (session.title !== reviewerSessionTitle) return;
+          if (session.metadata?.[reviewerMetadataKey] !== true) return;
+          try {
+            await this.#context.session.remove({ sessionID: session.id });
+          } catch {
+            // A stale session that cannot be removed is harmless.
+          }
+        }),
+      );
+    } catch {
+      // Listing sessions is best-effort; continue loading the plugin.
+    }
+  }
+
+  dispose(): void {
+    this.#reviewerSessionIDs.clear();
+  }
+
+  async #run(input: { sessionID: string; prompt: string }) {
+    await this.#context.session.prompt({ sessionID: input.sessionID, text: input.prompt });
+    await this.#context.session.wait({ sessionID: input.sessionID });
+    return await this.#context.session.context({ sessionID: input.sessionID });
   }
 }

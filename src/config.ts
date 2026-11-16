@@ -7,6 +7,7 @@ type ReviewerMode = (typeof reviewerModes)[number];
 export type ModelReference = {
   providerID: string;
   modelID: string;
+  variant?: string;
 };
 
 export type PluginConfiguration = {
@@ -20,6 +21,7 @@ export type PluginConfiguration = {
 const modelReferenceSchema = z.object({
   providerID: z.string(),
   modelID: z.string(),
+  variant: z.optional(z.string()),
 });
 
 const pluginConfigurationSchema = z.object({
@@ -41,7 +43,7 @@ export function parsePluginConfiguration(input: unknown): PluginConfiguration {
   return {
     mode: result.data.mode ?? "on-ask",
     reviewer: {
-      model: result.data.reviewer?.model,
+      ...(result.data.reviewer?.model ? { model: result.data.reviewer.model } : {}),
       timeoutMs: result.data.reviewer?.timeoutMs ?? 30_000,
     },
   };

@@ -62,8 +62,8 @@ jobs:
       - name: Run cicheck
         run: pnpm cicheck
 
-      - name: Build
-        run: pnpm build
+      - name: Check package contents
+        run: pnpm check:package
 
       - name: Configure GitHub Packages authentication
         run: npm config set //npm.pkg.github.com/:_authToken "$NODE_AUTH_TOKEN"

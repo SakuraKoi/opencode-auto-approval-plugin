@@ -1,14 +1,12 @@
 {
   "extends": "@tsconfig/node22/tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
     "rootDir": ".",
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": false
   },
   "include": ["src/**/*.ts", "*.config.ts", "knip.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules"]
 }

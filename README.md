@@ -3,9 +3,12 @@
 An [OpenCode](https://opencode.ai/) plugin that sends tool operations to a read-only AI reviewer
 before automatically approving them.
 
-The reviewer runs in its own OpenCode session. It may inspect the workspace with `read`, `glob`,
-`grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP tools, or
-start subagents.
+The reviewer runs in its own OpenCode session with thinking disabled to save tokens and latency.
+It may inspect the workspace with `read`, `glob`, and `grep`, but cannot edit files, run shell
+commands, access the network, use MCP tools, or start subagents.
+
+This package targets OpenCode 2.3.0 and later. It ships TypeScript source and is loaded directly by
+OpenCode; there is no build step.
 
 ## Install
 
@@ -15,65 +18,77 @@ project or global OpenCode configuration:
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@sakurakoi/opencode-auto-approval-plugin"],
+  "plugins": ["@sakurakoi/opencode-auto-approval-plugin"],
 }
 ```
 
-For local development, build the package and add the generated `dist/index.js` to
-`.opencode/plugins/`, or link the package through an npm workspace. OpenCode also loads TypeScript
-files placed directly in `.opencode/plugins/`.
+For local development, point `plugins` at the package directory or a local entry file. OpenCode
+also loads TypeScript files placed in `.opencode/plugins/`.
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "./src/index.ts",
+    },
+  ],
+}
+```
 
 ## Configuration
 
-Use a plugin tuple to pass options. The reviewer is disabled by default. When enabled, the defaults
-are `mode: "on-ask"`, a 30-second review timeout, and the provider/model of the main session.
+Use the object form to pass options. The reviewer is disabled by default. When enabled, the defaults
+are `mode: "on-ask"`, a 30-second review timeout, and the provider/model of the assistant message
+that requested the operation.
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    [
-      "@sakurakoi/opencode-auto-approval-plugin",
-      {
+  "plugins": [
+    {
+      "package": "@sakurakoi/opencode-auto-approval-plugin",
+      "options": {
         "mode": "on-ask",
         "reviewer": {
           "timeoutMs": 30000,
         },
       },
-    ],
+    },
   ],
 }
 ```
 
 Set `reviewer.model` to run reviews through a separately configured OpenCode provider and model.
-The plugin never reads or manages API keys; authentication remains entirely in OpenCode.
+The optional `variant` is passed through to OpenCode. The plugin never reads or manages API keys;
+authentication remains entirely in OpenCode.
 
 ```jsonc
 {
-  "plugin": [
-    [
-      "@sakurakoi/opencode-auto-approval-plugin",
-      {
+  "plugins": [
+    {
+      "package": "@sakurakoi/opencode-auto-approval-plugin",
+      "options": {
         "mode": "all-tools",
         "reviewer": {
           "model": {
             "providerID": "openrouter",
             "modelID": "openai/gpt-5.6-luna",
+            "variant": "fast",
           },
           "timeoutMs": 15000,
         },
       },
-    ],
+    },
   ],
 }
 ```
 
 ### Review modes
 
-| Mode               | Reviewed operations                                           | `allow`                      | `deny`                               | `escalate` / reviewer failure                             |
-| ------------------ | ------------------------------------------------------------- | ---------------------------- | ------------------------------------ | --------------------------------------------------------- |
-| `on-ask` (default) | Only operations that OpenCode already decided should ask      | Sends an SDK `once` approval | Leaves the OpenCode approval pending | Leaves the OpenCode approval pending                      |
-| `all-tools`        | Every intercepted tool call, including OpenCode-allowed calls | Runs the tool                | Blocks the tool                      | Blocks the tool and reports that human review is required |
+| Mode               | Reviewed operations                                           | `allow`                    | `deny`                              | `escalate` / reviewer failure                             |
+| ------------------ | ------------------------------------------------------------- | -------------------------- | ----------------------------------- | --------------------------------------------------------- |
+| `on-ask` (default) | Only operations that OpenCode already decided should ask      | Sets the effect to `allow` | Leaves the OpenCode approval denied | Leaves the OpenCode approval pending                      |
+| `all-tools`        | Every intercepted tool call, including OpenCode-allowed calls | Runs the tool              | Blocks the tool                     | Blocks the tool and reports that human review is required |
 
 ### Runtime toggle
 
@@ -84,14 +99,24 @@ Enable or disable the reviewer for the current OpenCode process with:
 /auto-approve false
 ```
 
-The toggle is held in memory and always starts disabled after OpenCode restarts. The command accepts
-only `true` or `false`; invalid arguments leave the current state unchanged. The result is shown as a
-TUI toast. The plugin then aborts the command before OpenCode can send its argument to the agent.
+Automatically accept any permission request without review with:
 
-OpenCode's public plugin API does not currently provide a way to create and await a new permission
-dialogue from `tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict:
-the tool does not run and the user must explicitly retry after reviewing the reported reason. In
-contrast, `on-ask` preserves OpenCode's native human permission UI.
+```text
+/yolo true
+/yolo false
+```
+
+Both toggles are held in memory and always start disabled after OpenCode restarts. Each command accepts
+`true`, `false`, or no recognized value to toggle the current state. The result is shown as a
+TUI toast in the session that issued the command.
+
+`/yolo` skips the reviewer entirely: in `on-ask` mode it allows every permission request, and in
+`all-tools` mode it allows every intercepted tool call. `/auto-approve` and `/yolo` are mutually
+exclusive; enabling one silently disables the other.
+
+The `all-tools` mode cannot open a fresh permission dialogue from the tool hook. Therefore, it fails
+closed for an `escalate` verdict: the tool does not run and the user must explicitly retry after
+reviewing the reported reason. In contrast, `on-ask` preserves OpenCode's native human permission UI.
 
 Explicit OpenCode `deny` rules always remain in effect. The plugin is an additional review layer;
 it never turns a built-in deny into an allow.
@@ -103,7 +128,6 @@ it never turns a built-in deny into an allow.
 | Runtime / tooling | [mise](https://mise.jdx.dev/)                                                     | `mise.toml`                                                 |
 | Package manager   | [pnpm](https://pnpm.io/)                                                          | `pnpm-workspace.yaml`, `.npmrc`                             |
 | Language          | [TypeScript](https://www.typescriptlang.org/)                                     | `tsconfig.json`                                             |
-| Build             | [tsdown](https://tsdown.dev/)                                                     | `tsdown.config.ts`                                          |
 | Test              | [Vitest](https://vitest.dev/)                                                     | `vitest.config.ts`                                          |
 | Format            | [oxfmt](https://oxc.rs/)                                                          | `.oxfmtrc.json`                                             |
 | Lint              | [oxlint](https://oxc.rs/)                                                         | `.oxlintrc.json`                                            |
@@ -129,19 +153,19 @@ pnpm cicheck       # run everything CI runs
 
 ## Scripts
 
-| Script                 | Description                                               |
-| ---------------------- | --------------------------------------------------------- |
-| `pnpm build`           | Build ESM + CJS bundles and type declarations into `dist` |
-| `pnpm check`           | `fmt:check` + `oxlint` + `typecheck`                      |
-| `pnpm cicheck`         | `cicheck:code` + `cicheck:content` — what CI runs         |
-| `pnpm cicheck:code`    | `check` + `test`                                          |
-| `pnpm cicheck:content` | `cspell` + `secretlint`                                   |
-| `pnpm fix`             | Auto-fix formatting and lint problems                     |
-| `pnpm generate`        | Regenerate AI tool configs from `.rulesync/`              |
-| `pnpm knip`            | Report unused files, exports, and dependencies            |
-| `pnpm test`            | Run the test suite                                        |
-| `pnpm test:coverage`   | Run the test suite with coverage                          |
-| `pnpm typecheck`       | Type-check without emitting                               |
+| Script                 | Description                                              |
+| ---------------------- | -------------------------------------------------------- |
+| `pnpm check`           | `fmt:check` + `oxlint` + `typecheck`                     |
+| `pnpm check:package`   | Verify export targets, import graph, and packed contents |
+| `pnpm cicheck`         | `cicheck:code` + `cicheck:content` — main CI checks      |
+| `pnpm cicheck:code`    | `check` + `test`                                         |
+| `pnpm cicheck:content` | `cspell` + `secretlint`                                  |
+| `pnpm fix`             | Auto-fix formatting and lint problems                    |
+| `pnpm generate`        | Regenerate AI tool configs from `.rulesync/`             |
+| `pnpm knip`            | Report unused files, exports, and dependencies           |
+| `pnpm test`            | Run the test suite                                       |
+| `pnpm test:coverage`   | Run the test suite with coverage                         |
+| `pnpm typecheck`       | Type-check without emitting                              |
 
 ## mise tasks
 
@@ -210,8 +234,8 @@ edit `.rulesync/**` instead, never the generated output.
 
 `.github/workflows/publish.yml` publishes to GitHub Packages when a GitHub Release is published, or
 when run manually for a release tag. It checks that the tag is a semantic `v*.*.*` version, matches
-`package.json`, and points to a commit in `main`; it then runs `pnpm cicheck`, builds, and publishes
-with the workflow's `GITHUB_TOKEN`.
+`package.json`, and points to a commit in `main`; it then runs `pnpm cicheck` and publishes with the
+workflow's `GITHUB_TOKEN`.
 
 The package is published as `@sakurakoi/opencode-auto-approval-plugin` to
 `https://npm.pkg.github.com`. For each later release, bump the package version on `main`, create its
@@ -219,8 +243,9 @@ matching `v<version>` tag, and publish the GitHub Release. Consumers need to con
 Packages registry before installing it.
 
 OpenCode publishes and distributes plugins as ordinary npm packages: users add the package name to
-the `plugin` array in `opencode.json`, and OpenCode installs it with Bun at startup. See the
-[OpenCode plugin documentation](https://opencode.ai/docs/plugins/) for the loader and cache behavior.
+the `plugins` array in `opencode.json`, and OpenCode installs it at startup. See the
+[OpenCode plugin documentation](https://opencode.ai/v2/docs/build/plugins) for the loader and cache
+behavior.
 
 ## License
 

@@ -1,6 +1,6 @@
 {
     "name": "@sakurakoi/opencode-auto-approval-plugin",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "description": "opencode plugin that auto-approves tool permission requests based on configurable rules",
     "keywords": [
         "opencode",
@@ -22,26 +22,16 @@
     "author": "dyoshikawa,SakuraKooi",
     "type": "module",
     "exports": {
-        ".": {
-            "import": {
-                "types": "./dist/index.d.ts",
-                "default": "./dist/index.js"
-            },
-            "require": {
-                "types": "./dist/index.d.cts",
-                "default": "./dist/index.cjs"
-            }
-        }
+        ".": "./src/index.ts",
+        "./rpc": "./src/rpc.ts",
+        "./tui": "./src/tui.ts"
     },
-    "main": "dist/index.cjs",
-    "module": "dist/index.js",
-    "types": "dist/index.d.ts",
     "files": [
-        "dist"
+        "src"
     ],
     "scripts": {
-        "build": "tsdown",
         "check": "pnpm run fmt:check && pnpm run oxlint && pnpm run typecheck",
+        "check:package": "node scripts/check-package.mjs",
         "cicheck": "pnpm run cicheck:code && pnpm run cicheck:content",
         "cicheck:code": "pnpm run check && pnpm run test",
         "cicheck:content": "pnpm run cspell && pnpm run secretlint",
@@ -54,7 +44,6 @@
         "oxlint": "oxlint . --max-warnings 0",
         "oxlint:fix": "oxlint . --fix --max-warnings 0",
         "prepare": "simple-git-hooks && pnpm generate",
-        "prepublishOnly": "pnpm build",
         "secretlint": "secretlint --secretlintignore .gitignore \"**/*\"",
         "sort": "sort-package-json",
         "test": "vitest run --silent=true",
@@ -66,11 +55,10 @@
         "pre-commit": "pnpm exec lint-staged"
     },
     "dependencies": {
-        "@opencode-ai/sdk": "1.18.21",
         "zod": "4.1.12"
     },
     "devDependencies": {
-        "@opencode-ai/plugin": "1.18.21",
+        "@opencode/plugin": "2.3.0",
         "@secretlint/secretlint-rule-preset-recommend": "13.0.4",
         "@tsconfig/node22": "22.0.5",
         "@types/node": "26.1.2",
@@ -84,13 +72,11 @@
         "secretlint": "13.0.4",
         "simple-git-hooks": "2.13.1",
         "sort-package-json": "4.0.0",
-        "tsdown": "0.22.14",
-        "tsx": "4.23.5",
         "typescript": "7.0.2",
         "vitest": "4.1.10"
     },
     "peerDependencies": {
-        "@opencode-ai/plugin": ">=1.18.21 <2"
+        "@opencode/plugin": ">=2.3.0 <3"
     },
     "engines": {
         "node": ">=22.0.0",
