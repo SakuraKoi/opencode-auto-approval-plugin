@@ -11,15 +11,36 @@ const notifySchema = {
   additionalProperties: false,
 } as const;
 
+const emptyInputSchema = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
+} as const;
+
+const stateSchema = {
+  type: "object",
+  properties: {
+    mode: { type: "string", enum: ["off", "review", "yolo"] },
+  },
+  required: ["mode"],
+  additionalProperties: false,
+} as const;
+
 /**
- * Contract between the server plugin and the TUI part. The TUI subscribes to `notify` and shows
- * each event as a toast.
+ * Contract between the server plugin and the TUI part. The TUI subscribes to `notify` for toasts,
+ * reads `getState` on startup, and follows `state` to keep the sidebar indicator current.
  */
 export const AutoApprovalRpc = Rpc.define({
   id: "auto-approval",
-  methods: {},
+  methods: {
+    getState: {
+      input: emptyInputSchema,
+      output: stateSchema,
+    },
+  },
   events: {
     notify: { schema: notifySchema },
+    state: { schema: stateSchema },
   },
 });
 
@@ -29,4 +50,10 @@ export type AutoApprovalNotification = {
   sessionID: string;
   message: string;
   variant: string;
+};
+
+export type AutoApprovalMode = "off" | "review" | "yolo";
+
+export type AutoApprovalState = {
+  mode: AutoApprovalMode;
 };

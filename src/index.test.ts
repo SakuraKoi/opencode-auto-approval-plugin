@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { createAutoApprovalPlugin } from "./index.ts";
 import { applyReviewerContext } from "./reviewer-agent.ts";
+import type { AutoApprovalState } from "./rpc.ts";
 
 const originSessionID = "origin-session";
 const reviewerSessionID = "reviewer-session";
@@ -71,6 +72,7 @@ function createHarness(input: {
   transcript?: ReadonlyArray<Record<string, unknown>>;
 }) {
   const notifications: Notification[] = [];
+  const states: AutoApprovalState[] = [];
   const createdSessions: Record<string, unknown>[] = [];
   const removedSessions: string[] = [];
   const interruptedSessions: string[] = [];
@@ -83,6 +85,7 @@ function createHarness(input: {
   let permissionHook: ((evaluation: PermissionEvaluation) => Promise<void>) | undefined;
   let toolHook: ((event: ToolEvent) => Promise<void>) | undefined;
   let sessionHook: ((request: SessionContextRequest) => Promise<void>) | undefined;
+  let getState: (() => Promise<AutoApprovalState>) | undefined;
   let duringReview: ((sessionID: string) => Promise<void> | void) | undefined;
 
   const originMessages = input.transcript ?? transcript();
@@ -157,25 +160,40 @@ function createHarness(input: {
       reload: async () => undefined,
     },
     rpc: {
-      register: async () => ({
-        events: {
-          emit: async (_name: string, data: Notification) => {
-            notifications.push(data);
+      register: async (
+        _definition: unknown,
+        handlers: { getState: () => Promise<AutoApprovalState> },
+      ) => {
+        getState = handlers.getState;
+        return {
+          events: {
+            emit: async (name: string, data: unknown) => {
+              if (name === "state") {
+                states.push(data as AutoApprovalState);
+                return;
+              }
+              notifications.push(data as Notification);
+            },
           },
-        },
-        dispose: async () => void disposed.push("rpc"),
-      }),
+          dispose: async () => void disposed.push("rpc"),
+        };
+      },
     },
   };
 
   return {
     context,
     notifications,
+    states,
     createdSessions,
     removedSessions,
     interruptedSessions,
     disposed,
     commands,
+    getState: async () => {
+      if (!getState) throw new Error("rpc handlers were not registered");
+      return getState();
+    },
     get permissionHook() {
       if (!permissionHook) throw new Error("permission hook was not registered");
       return permissionHook;
@@ -228,16 +246,18 @@ function toolEvent(input: Partial<ToolEvent> = {}): ToolEvent {
   };
 }
 
+async function runCommand(harness: Awaited<ReturnType<typeof setup>>, name: string, args = "") {
+  const command = harness.commands.get(name);
+  if (!command) throw new Error(`${name} command was not registered`);
+  await command.execute({ sessionID: originSessionID, prompt: { text: args } });
+}
+
 async function enableAutoApprove(harness: Awaited<ReturnType<typeof setup>>) {
-  const command = harness.commands.get("auto-approve");
-  if (!command) throw new Error("auto-approve command was not registered");
-  await command.execute({ sessionID: originSessionID, prompt: { text: "" } });
+  await runCommand(harness, "auto-approve");
 }
 
 async function enableYolo(harness: Awaited<ReturnType<typeof setup>>) {
-  const command = harness.commands.get("yolo");
-  if (!command) throw new Error("yolo command was not registered");
-  await command.execute({ sessionID: originSessionID, prompt: { text: "" } });
+  await runCommand(harness, "yolo");
 }
 
 describe("createAutoApprovalPlugin", () => {
@@ -358,6 +378,31 @@ describe("createAutoApprovalPlugin", () => {
     expect(evaluation.effect).toBe("allow");
     expect(harness.createdSessions).toHaveLength(1);
     expect(harness.notifications.at(-1)?.message).toContain("reviewer allowed");
+  });
+
+  it("reports the current mode over rpc", async () => {
+    const harness = await setup({});
+    await expect(harness.getState()).resolves.toEqual({ mode: "off" });
+
+    await enableAutoApprove(harness);
+    await expect(harness.getState()).resolves.toEqual({ mode: "review" });
+
+    await enableYolo(harness);
+    await expect(harness.getState()).resolves.toEqual({ mode: "yolo" });
+  });
+
+  it("publishes the mode after each command", async () => {
+    const harness = await setup({});
+    expect(harness.states).toEqual([]);
+
+    await enableAutoApprove(harness);
+    expect(harness.states.at(-1)).toEqual({ mode: "review" });
+
+    await enableYolo(harness);
+    expect(harness.states.at(-1)).toEqual({ mode: "yolo" });
+
+    await runCommand(harness, "yolo", "false");
+    expect(harness.states.at(-1)).toEqual({ mode: "off" });
   });
 
   it("reviews tool calls in all-tools mode", async () => {

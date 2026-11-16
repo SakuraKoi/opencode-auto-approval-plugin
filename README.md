@@ -57,6 +57,9 @@ export * from "./src/index.ts";
 export { default } from "./src/tui.ts";
 ```
 
+Keep the whole `src/` directory: the TUI entry imports `src/mode-indicator.tsx` for the sidebar
+indicator.
+
 Then reference the directory from `plugins` and keep its options beside it:
 
 ```jsonc
@@ -147,6 +150,20 @@ Automatically accept any permission request without review with:
 Both toggles are held in memory and always start disabled after OpenCode restarts. Each command accepts
 `true`, `false`, or no recognized value to toggle the current state. The result is shown as a
 TUI toast in the session that issued the command.
+
+### Sidebar indicator
+
+The TUI part shows the active mode above the sidebar footer, immediately before the built-in
+`opencode.sidebar.footer` rows:
+
+| State                                | Indicator     |
+| ------------------------------------ | ------------- |
+| Both `/auto-approve` and `/yolo` off | hidden        |
+| `/auto-approve` on                   | `Auto Review` |
+| `/yolo` on                           | `Yolo`        |
+
+The indicator reads the server's in-memory mode over the plugin RPC, so it follows every toggle and
+returns to hidden after an OpenCode restart.
 
 `/yolo` skips the reviewer entirely: in `on-ask` mode it allows every permission request, and in
 `all-tools` mode it allows every intercepted tool call. `/auto-approve` and `/yolo` are mutually

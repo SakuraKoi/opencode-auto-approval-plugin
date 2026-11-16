@@ -2,6 +2,7 @@ import { Plugin } from "@opencode/plugin";
 
 import { createAutoApproveCommandHandler } from "./auto-approve-command.ts";
 import { parsePluginConfiguration } from "./config.ts";
+import { autoApprovalMode } from "./mode.ts";
 import {
   decisionNotification,
   errorMessage,
@@ -22,7 +23,9 @@ export function createAutoApprovalPlugin(): Plugin.Plugin {
     async setup(context) {
       const configuration = parsePluginConfiguration(context.options ?? {});
       const reviewer = new Reviewer({ context, configuration });
-      const rpc = await context.rpc.register(AutoApprovalRpc, {});
+      const rpc = await context.rpc.register(AutoApprovalRpc, {
+        getState: async () => ({ mode: currentMode() }),
+      });
 
       const notify = async (input: Notification): Promise<void> => {
         try {
@@ -34,6 +37,21 @@ export function createAutoApprovalPlugin(): Plugin.Plugin {
 
       const autoApproveCommand = createAutoApproveCommandHandler({ notify });
       const yoloCommand = createYoloCommandHandler({ notify });
+
+      function currentMode() {
+        return autoApprovalMode({
+          autoReview: autoApproveCommand.isEnabled(),
+          yolo: yoloCommand.isEnabled(),
+        });
+      }
+
+      const publishState = async (): Promise<void> => {
+        try {
+          await rpc.events.emit("state", { mode: currentMode() });
+        } catch {
+          // The sidebar indicator is best-effort and must not affect command behavior.
+        }
+      };
 
       const permissionRegistration = await context.permission.hook(
         "evaluate",
@@ -176,6 +194,7 @@ export function createAutoApprovalPlugin(): Plugin.Plugin {
               sessionID: invocation.sessionID,
             });
             if (autoApproveCommand.isEnabled()) yoloCommand.disable();
+            await publishState();
           },
         });
         editor.add({
@@ -187,6 +206,7 @@ export function createAutoApprovalPlugin(): Plugin.Plugin {
               sessionID: invocation.sessionID,
             });
             if (yoloCommand.isEnabled()) autoApproveCommand.disable();
+            await publishState();
           },
         });
       });

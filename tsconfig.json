@@ -5,8 +5,10 @@
     "allowImportingTsExtensions": true,
     "rootDir": ".",
     "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": false
+    "exactOptionalPropertyTypes": false,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@opentui/solid"
   },
-  "include": ["src/**/*.ts", "*.config.ts", "knip.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "*.config.ts", "knip.ts"],
   "exclude": ["node_modules"]
 }

@@ -16,7 +16,7 @@ function sourceFiles(directory) {
   return readdirSync(directory).flatMap((entry) => {
     const fullPath = join(directory, entry);
     if (statSync(fullPath).isDirectory()) return sourceFiles(fullPath);
-    return fullPath.endsWith(".ts") ? [fullPath] : [];
+    return fullPath.endsWith(".ts") || fullPath.endsWith(".tsx") ? [fullPath] : [];
   });
 }
 
@@ -40,7 +40,7 @@ check(
 );
 
 for (const target of Object.values(manifest.exports ?? {})) {
-  check(/^\.\/src\/.+\.ts$/.test(target), `${target} must point at a TypeScript source file`);
+  check(/^\.\/src\/.+\.tsx?$/.test(target), `${target} must point at a TypeScript source file`);
   check(existsSync(join(root, target)), `${target} does not exist`);
 }
 
@@ -51,7 +51,10 @@ for (const file of sourceFiles(sourceDirectory)) {
   for (const match of contents.matchAll(importPattern)) {
     const specifier = match[1];
     if (!specifier || (!specifier.startsWith("./") && !specifier.startsWith("../"))) continue;
-    check(specifier.endsWith(".ts"), `${file} must import ${specifier} with a .ts extension`);
+    check(
+      specifier.endsWith(".ts") || specifier.endsWith(".tsx"),
+      `${file} must import ${specifier} with a .ts or .tsx extension`,
+    );
     check(existsSync(join(dirname(file), specifier)), `${file} imports missing ${specifier}`);
   }
 }

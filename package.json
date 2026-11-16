@@ -59,6 +59,8 @@
     },
     "devDependencies": {
         "@opencode/plugin": "2.3.0",
+        "@opentui/core": "0.8.4",
+        "@opentui/solid": "0.8.4",
         "@secretlint/secretlint-rule-preset-recommend": "13.0.4",
         "@tsconfig/node22": "22.0.5",
         "@types/node": "26.1.2",
@@ -71,12 +73,16 @@
         "rulesync": "16.5.0",
         "secretlint": "13.0.4",
         "simple-git-hooks": "2.13.1",
+        "solid-js": "1.9.19",
         "sort-package-json": "4.0.0",
         "typescript": "7.0.2",
         "vitest": "4.1.10"
     },
     "peerDependencies": {
-        "@opencode/plugin": ">=2.3.0 <3"
+        "@opencode/plugin": ">=2.3.0 <3",
+        "@opentui/core": ">=0.8.4",
+        "@opentui/solid": ">=0.8.4",
+        "solid-js": ">=1.9.0"
     },
     "engines": {
         "node": ">=22.0.0",
